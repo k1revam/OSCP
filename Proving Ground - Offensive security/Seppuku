@@ -1,7 +1,7 @@
 Summary
 This machine is exploited by brute-forcing a user's password. It is escalated by using a leaked private SSH key and misconfigured system permissions.
 
-Enumeration 
+**Enumeration**
 
 Nmap
 We start off by running an nmap scan against all TCP ports:
