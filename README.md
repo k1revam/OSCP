@@ -1,2 +1,2 @@
 This category include walkthoughs for vulnerable machines done on OFFSEC - Proving grounds.
-Since adding picture in github is a pain and PDF formating fails badly, I've added the entire cherry tree file containing all walkthroughs.
+Since adding pictures on github is a pain and PDF formating fails badly, I've added the entire cherry tree file containing all walkthroughs.
